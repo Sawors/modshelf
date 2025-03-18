@@ -189,11 +189,36 @@ class ModpackInstallScreen extends StatelessWidget {
   Widget buildModpackQuickInfoRow(
       BuildContext context, InstallScreenData data) {
     String modLoader = data.modpackData.manifest.modLoader;
+    List<DropdownMenuEntry<String>> versions = data.modpackData.versions
+        .map((v) => DropdownMenuEntry(value: v, label: v))
+        .toList()
+        .reversed
+        .toList();
+    ThemeData theme = Theme.of(context);
+    InputDecorationTheme inputDecorationTheme = theme.inputDecorationTheme;
+    TextStyle? mainStyle = theme.textTheme.bodyLarge;
+    inputDecorationTheme = inputDecorationTheme.copyWith(
+      isDense: true,
+      constraints: BoxConstraints.tight(const Size.fromHeight(35)),
+      suffixStyle:
+          mainStyle?.copyWith(color: mainStyle.color?.withValues(alpha: 0.66)),
+      contentPadding: const EdgeInsets.only(left: 8),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+      ),
+    );
     List<Widget> details = [
       _getInfoDisplay(
           context, "Game Version", data.modpackData.manifest.gameVersion),
-      _getInfoDisplay(
-          context, "Version", data.modpackData.manifest.version.toString()),
+      _getInfoDisplay(context, "Version", null,
+          value: DropdownMenu(
+            inputDecorationTheme: inputDecorationTheme,
+            textStyle: mainStyle,
+            width: 95,
+            dropdownMenuEntries: versions,
+            initialSelection: versions.first.value,
+            onSelected: (s) {},
+          )),
       _getInfoDisplay(context, "Install Size",
           bytesToDisplay(data.modpackData.archiveSize)),
     ];
@@ -221,21 +246,30 @@ class ModpackInstallScreen extends StatelessWidget {
     );
   }
 
-  Widget _getInfoDisplay(BuildContext context, String title, String details) {
+  Widget _getInfoDisplay(BuildContext context, String? title, String? details,
+      {Widget? label, Widget? value}) {
     TextTheme theme = Theme.of(context).textTheme;
     TextStyle? mainStyle = theme.bodyLarge;
+    if (label == null && title == null) {
+      throw ArgumentError("One of 'label' or 'title' must be non-null!");
+    }
+    if (value == null && details == null) {
+      throw ArgumentError("One of 'value' or 'details' must be non-null!");
+    }
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          title,
-          style: mainStyle?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        Text(
-          details,
-          style: mainStyle?.copyWith(
-              color: mainStyle.color?.withValues(alpha: 0.66)),
-        )
+        label ??
+            Text(
+              title ?? "TITLE CANNOT BE NULL",
+              style: mainStyle?.copyWith(fontWeight: FontWeight.bold),
+            ),
+        value ??
+            Text(
+              details ?? "DETAILS CANNOT BE NULL",
+              style: mainStyle?.copyWith(
+                  color: mainStyle.color?.withValues(alpha: 0.66)),
+            )
       ],
     );
   }

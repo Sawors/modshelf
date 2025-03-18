@@ -14,9 +14,10 @@ class ModpackDownloadData {
   final PackConfig config;
   final Uri archive;
   final int archiveSize;
+  final List<String> versions;
 
-  ModpackDownloadData(
-      this.manifest, this.archive, this.archiveSize, this.config);
+  ModpackDownloadData(this.manifest, this.archive, this.archiveSize,
+      this.config, this.versions);
 }
 
 class ServerLocation {
@@ -195,7 +196,8 @@ class ModshelfServerAgent extends ServerAgent {
         rep.body.split("\r\n").map((e) => ContentEntry.fromString(e)).toList();
     int totalSize =
         entries.fold(0, (v1, v2) => v1 + (int.tryParse(v2.size) ?? 0));
-    return ModpackDownloadData(manifest, archivePath, totalSize, PackConfig());
+    return ModpackDownloadData(manifest, archivePath, totalSize, PackConfig(),
+        await fetchVersions(modpackId));
   }
 
   @override
