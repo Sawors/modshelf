@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'manifest.dart';
+import 'modpack_config.dart';
 
 final String s = Platform.pathSeparator;
 
@@ -19,20 +20,19 @@ class DirNames {
   static const String installThemeDir = "$install/theme";
   static const String installConfigDir = "$install/config";
   static const String installLocalDir = "$install/install";
+  static const String publishDir = "$install/publish";
+  static const String devDir = "$install/dev";
   static const String themeFile = "$installThemeDir/theme.json";
   static const String readmeFile = "$install/readme.md";
   static const String version = "$install/version";
-  static const String versionPatchnoteFile = "$version/patchnote.md";
-  static const String releases = "$install/releases";
-  static const String reports = "$install/reports";
-  static const String patchnotes = "$install/version";
-  static const String server = "$install/server";
+  static const String releases = "$devDir/releases";
+  static const String reports = "$installLocalDir/reports";
+  static const String patchnotes = "$installLocalDir/version";
+  static const String server = "$installLocalDir/server";
   static const String fileManifest = "$install/manifest.json";
-  static const String fileConfig = "$installConfigDir/config.json";
-  static const String fileConfigPublication = "$install/publish.json";
+  static const String fileConfig = "$install/config.json";
+  static const String fileConfigPublication = "$publishDir/publish.json";
   static const String fileConfigServer = "$server/serverconfig.json";
-  static const String fileVersionContent = "$patchnotes/version_content.txt";
-  static const String fileServerMarker = "$server/is-server.json";
   static const String fileVersionChecker = "$config/bcc.json";
 }
 
@@ -194,8 +194,6 @@ class ModpackTheme {
   }
 }
 
-class ModpackConfig {}
-
 class ModpackData {
   final Manifest manifest;
   final ModpackConfig modpackConfig;
@@ -210,8 +208,10 @@ class ModpackData {
 
   static Future<ModpackData> fromInstallation(Directory source) async {
     File manFile = File("${source.path}$s${DirNames.fileManifest}");
+    File confFile = File("${source.path}$s${DirNames.fileConfig}");
     Manifest man = Manifest.fromJsonString(await manFile.readAsString());
-    ModpackConfig modpackConfig = ModpackConfig();
+    ModpackConfig modpackConfig =
+        ModpackConfig.fromJsonString(await confFile.readAsString());
 
     ModpackTheme theme = await ModpackTheme.fromFile(
         File("${source.path}$s${DirNames.themeFile}"));

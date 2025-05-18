@@ -10,6 +10,7 @@ import 'package:modshelf/tools/adapters/games.dart';
 import 'package:modshelf/tools/adapters/local_files.dart';
 import 'package:modshelf/tools/core/core.dart';
 import 'package:modshelf/ui/main_page/main_page.dart';
+import 'package:window_manager/window_manager.dart';
 
 final Map<String, PageState> pageStateInstances = {};
 
@@ -189,7 +190,11 @@ Future<bool> startupInitLoad() async {
 
 void main(List<String> args) async {
   if (args.contains("nogui")) {
+    WidgetsFlutterBinding.ensureInitialized();
+    await windowManager.ensureInitialized();
+    await windowManager.hide();
     await runCli(args);
+    //SystemNavigator.pop();
   } else {
     await startupInitLoad();
     runApp(const MyApp());

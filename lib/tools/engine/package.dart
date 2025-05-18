@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:collection/collection.dart';
 import 'package:modshelf/tools/core/core.dart';
+import 'package:modshelf/tools/core/modpack_config.dart';
 import 'package:modshelf/tools/utils.dart';
 
 enum PatchDifferenceType { added, removed, modified, untouched }
@@ -105,13 +106,15 @@ class PatchDifference {
     final oldVoid = oldEntry == null || oldEntry.isVoid();
     final newVoid = newEntry == null || newEntry.isVoid();
 
-    return oldVoid && !newVoid
-        ? PatchDifferenceType.added
-        : !oldVoid && newVoid
-            ? PatchDifferenceType.removed
-            : !oldVoid && !newVoid && oldEntry.crc32 != newEntry.crc32
-                ? PatchDifferenceType.modified
-                : PatchDifferenceType.untouched;
+    if (oldVoid && !newVoid) {
+      return PatchDifferenceType.added;
+    } else if (!oldVoid && newVoid) {
+      return PatchDifferenceType.removed;
+    } else if (!oldVoid && !newVoid && oldEntry.crc32 != newEntry.crc32) {
+      return PatchDifferenceType.modified;
+    }
+
+    return PatchDifferenceType.untouched;
   }
 
   PatchDifference.fromEntries(PatchEntry? oldEntry, PatchEntry? newEntry) {
@@ -157,13 +160,15 @@ class Patch {
       final content = entry.$2;
       for (PatchEntry newEntry in content.content) {
         String path = newEntry.relativePath;
-        PatchEntry? oldEntry =
-            lastState[path] ?? PatchEntry.voidEntry(version: content.version);
+        PatchEntry? oldEntry = lastState[path] ?? PatchEntry.voidEntry();
         PatchDifference d = PatchDifference.fromEntries(oldEntry, newEntry);
-
-        if ((diff[path] != null && d.type == PatchDifferenceType.untouched)) {
-          continue;
+        if (path == "/config/dehydration.json5") {
+          print(
+              "${entry.$1} ${d.type.name} => check: ${oldEntry.version} / ${oldEntry.relativePath} | ${newEntry.version} / ${newEntry.relativePath}");
         }
+        // if ((diff[path] != null && d.type == PatchDifferenceType.untouched)) {
+        //   continue;
+        // }
         diff[path] = d;
         lastState[path] = newEntry;
       }
@@ -171,16 +176,46 @@ class Patch {
     patch = diff.values.toSet();
   }
 
-  Patch.difference(ContentSnapshot oldContent, ContentSnapshot newContent)
-      : this.compiled([oldContent, newContent]);
+  Patch.difference(ContentSnapshot oldContent, ContentSnapshot newContent) {
+    Map<String, PatchEntry> oldIndex = {
+      for (var v in oldContent.content) v.relativePath: v
+    };
+    Map<String, PatchEntry> newIndex = {};
+    patch = {};
+    for (var v in newContent.content) {
+      // added, modified, untouched
+      PatchEntry? oldValue = oldIndex[v.relativePath];
+      newIndex[v.relativePath] = v;
+      patch.add(PatchDifference(
+          oldEntry: oldValue ?? PatchEntry.voidEntry(),
+          newEntry: v,
+          type: PatchDifference.difference(oldValue, v)));
+    }
+
+    patch.addAll(oldIndex.entries
+        .where((v) => !newIndex.containsKey(v.key))
+        .map((v) => PatchDifference(
+            oldEntry: v.value,
+            newEntry: PatchEntry.voidEntry(),
+            type: PatchDifferenceType.removed)));
+  }
+
+  bool isChanged(PatchDifference diff) {
+    switch (diff.type) {
+      case PatchDifferenceType.added:
+        return diff.oldEntry.isVoid() && !diff.newEntry.isVoid();
+      case PatchDifferenceType.removed:
+        return !diff.oldEntry.isVoid() && diff.newEntry.isVoid();
+      case PatchDifferenceType.modified:
+        return true;
+      case PatchDifferenceType.untouched:
+        return false;
+    }
+  }
 
   Set<PatchDifference> onlyChanged({bool considerFirstVersionAsAdded = false}) {
     return patch
-        .where((v) =>
-            (v.type != PatchDifferenceType.added ||
-                considerFirstVersionAsAdded ||
-                v.newEntry.version != firstVersion) &&
-            v.type != PatchDifferenceType.untouched)
+        .where((v) => considerFirstVersionAsAdded || isChanged(v))
         .toSet();
   }
 
@@ -202,19 +237,45 @@ class ContentSnapshot {
   ContentSnapshot(this.content, this.version);
 
   static Future<ContentSnapshot> fromDirectory(Directory dir, String version,
-      {List<String>? fileRelativePathExclude}) async {
-    Set<PatchEntry> content = await dir
-        .list(recursive: true)
-        .where((e) =>
-            (fileRelativePathExclude == null ||
-                fileRelativePathExclude.contains(e.path)) &&
-            FileSystemEntity.isFileSync(e.path))
-        .asyncMap((e) async {
-      return PatchEntry.fromFile(File(e.path), Directory(dir.path),
-          sourceVersion: version);
-    }).toSet();
+      {List<String>? fileRelativePathExclude, ModpackConfig? config}) async {
+    List<PatchEntry> filePatch = [];
+    if (config == null) {
+      filePatch = await dir
+          .list(recursive: true)
+          .where((e) =>
+              (fileRelativePathExclude == null ||
+                  fileRelativePathExclude.contains(e.path)) &&
+              FileSystemEntity.isFileSync(e.path))
+          .asyncMap((e) async {
+        return PatchEntry.fromFile(File(e.path), Directory(dir.path),
+            sourceVersion: version);
+      }).toList();
+    } else {
+      for (String path in config.bundleInclude) {
+        if (config.bundleExclude.any((v) => path.startsWith(v))) {
+          continue;
+        }
+        String absolutePath = "${dir.path}/$path";
+        if (await FileSystemEntity.isFile(absolutePath)) {
+          filePatch.add(await PatchEntry.fromFile(File(absolutePath), dir,
+              sourceVersion: version));
+        } else if (await FileSystemEntity.isDirectory(absolutePath)) {
+          await Directory(absolutePath)
+              .list(recursive: true)
+              .forEach((f) async {
+            if (FileSystemEntity.isFileSync(f.path)) {
+              if (config.bundleExclude.any((v) => path.startsWith(v))) {
+                return;
+              }
+              filePatch.add(await PatchEntry.fromFile(File(f.path), dir,
+                  sourceVersion: version));
+            }
+          });
+        }
+      }
+    }
 
-    return ContentSnapshot(content, version);
+    return ContentSnapshot(filePatch.toSet(), version);
   }
 
   static ContentSnapshot fromContentString(String contentString,

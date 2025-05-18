@@ -213,8 +213,8 @@ class ModshelfServerAgent extends ServerAgent {
   @override
   Future<ContentSnapshot> getContent(
       NamespacedKey modpackId, String version) async {
-    Uri archivePath = Uri.parse(
-        "$host/${mappings.api}/${modpackId.toPath()}/$version/${mappings.content}");
+    Uri archivePath =
+        Uri.parse("$host/${modpackId.toPath()}/$version/${mappings.content}");
     Response resp = await get(archivePath);
     return ContentSnapshot.fromContentString(resp.body);
   }

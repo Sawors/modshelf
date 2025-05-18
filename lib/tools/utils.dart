@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math';
 
+import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:mime/mime.dart';
 
@@ -165,4 +166,123 @@ String resourceNameUri(Uri uri) {
 
 String resourceName(String path, {String pathSeparator = "/"}) {
   return path.split(pathSeparator).lastWhere((v) => v.isNotEmpty);
+}
+
+class Table<T> {
+  Table();
+
+  final Map<int, Map<int, T>> table = {};
+
+  Table.fromMap(Map<dynamic, dynamic> jsonMap) {
+    if (jsonMap is Map<int, Map<int, T>>) {
+      this.table.addAll(jsonMap);
+      return;
+    }
+
+    for (var mp in jsonMap.entries) {
+      final row = mp.key;
+      final value = mp.value;
+      if (!row is int) {
+        throw const FormatException("Row key can only be of type int");
+      }
+      if (!value is Map<dynamic, dynamic>) {
+        throw const FormatException("Row value type can only be of type Map");
+      }
+      for (var mp2 in (value as Map<dynamic, dynamic>).entries) {
+        final column = mp2.key;
+        final value2 = mp2.value;
+        if (!column is int) {
+          throw const FormatException("Column key can only be of type int");
+        }
+        if (!value2 is T) {
+          throw const FormatException("Cell value is not of the correct type");
+        }
+        insert(row, column, value2);
+      }
+    }
+  }
+
+  setRow(int row, List<T?> values) {
+    for (var v in values.indexed) {
+      final vv = v.$2;
+      if (vv != null) {
+        insert(row, v.$1, vv);
+      }
+    }
+  }
+
+  addRow(List<T?> values) {
+    int startIndex = table.keys.maxOrNull ?? 0;
+    setRow(startIndex + 1, values);
+  }
+
+  setColumn(int column, List<T?> values) {
+    for (var v in values.indexed) {
+      final vv = v.$2;
+      if (vv != null) {
+        insert(v.$1, column, vv);
+      }
+    }
+  }
+
+  List<T?> getRow(int row) {
+    List<T?> rowData = [];
+    final baseData = table[row] ?? {};
+    for (int col = 0; col <= (baseData.keys.maxOrNull ?? 0); col++) {
+      rowData.add(baseData[col]);
+    }
+    return rowData;
+  }
+
+  List<T?> getColumn(int column) {
+    List<T?> col = [];
+    for (var row in table.values) {
+      final val = row[column];
+      col.add(val);
+    }
+    return col;
+  }
+
+  T? insert(int row, int column, T value) {
+    Map<int, T> rowContent = table[row] ?? {};
+    final oldValue = rowContent[column];
+    rowContent[column] = value;
+    table[row] = rowContent;
+    return oldValue;
+  }
+
+  T? get(int row, int column) {
+    Map<int, T>? rowContent = table[row];
+    if (rowContent == null) {
+      return null;
+    }
+    return rowContent[column];
+  }
+
+  String toCsv() {
+    String output = "";
+    for (int row = 0; row <= (table.keys.maxOrNull ?? 0); row++) {
+      final rowData = getRow(row);
+      final line = rowData.isNotEmpty
+          ? rowData.map((v) => v != null ? v.toString() : "").join(";")
+          : ";;";
+      output += "$line\n";
+    }
+    return output;
+  }
+
+  static Table<String> fromCsv(String csv) {
+    Table<String> out = Table();
+    for (var line in csv.split("\n").indexed) {
+      int lineNumber = line.$1;
+      String lineValue = line.$2;
+      for (var v in lineValue.split(";").indexed) {
+        if (v.$2.isNotEmpty) {
+          out.insert(lineNumber, v.$1, v.$2);
+        }
+      }
+    }
+
+    return out;
+  }
 }

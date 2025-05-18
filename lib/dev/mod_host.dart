@@ -157,6 +157,8 @@ class ModrinthModHost extends ModHost {
     Response req = await get(source, headers: headers);
     String body = req.body;
 
+    print(req.headers);
+
     if (body.isEmpty) {
       return null;
     }
