@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:modshelf/main.dart';
 import 'package:modshelf/tools/adapters/launchers.dart';
 import 'package:modshelf/tools/adapters/local_files.dart';
 import 'package:modshelf/tools/adapters/modloaders.dart';
 import 'package:modshelf/tools/core/core.dart';
 import 'package:modshelf/tools/utils.dart';
+
+import '../cache.dart';
 
 final NamespacedKey steamLibKey = NamespacedKey("game-libraries", "steam");
 

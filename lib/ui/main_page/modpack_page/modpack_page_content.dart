@@ -100,8 +100,7 @@ class _ModpackPageContentState extends State<ModpackPageContent> {
     return Column(
       children: [
         Padding(
-          padding: EdgeInsets.only(
-              top: widget.cardMargin * 1.61, bottom: widget.cardMargin / 1.61),
+          padding: EdgeInsets.symmetric(vertical: widget.cardMargin / 1.61),
           child: SizedBox(
             width: double.infinity,
             child: SegmentedButton(

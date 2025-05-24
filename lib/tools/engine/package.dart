@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -5,6 +6,10 @@ import 'package:collection/collection.dart';
 import 'package:modshelf/tools/core/core.dart';
 import 'package:modshelf/tools/core/modpack_config.dart';
 import 'package:modshelf/tools/utils.dart';
+
+import '../../cli/cli_parser.dart';
+import '../adapters/servers.dart';
+import '../core/manifest.dart';
 
 enum PatchDifferenceType { added, removed, modified, untouched }
 
@@ -122,6 +127,24 @@ class PatchDifference {
     this.newEntry = newEntry ?? PatchEntry.voidEntry();
     type = difference(oldEntry, newEntry);
   }
+
+  @override
+  String toString() {
+    return "${type.toString()} : (${oldEntry.size}, ${oldEntry.crc32}, ${oldEntry.version})${oldEntry.relativePath} -> (${newEntry.size}, ${newEntry.crc32}, ${newEntry.version})${newEntry.relativePath}";
+  }
+
+  PatchEntry getSignificant() {
+    switch (type) {
+      case PatchDifferenceType.added:
+        return newEntry;
+      case PatchDifferenceType.removed:
+        return PatchEntry.voidEntry(version: oldEntry.version);
+      case PatchDifferenceType.modified:
+        return newEntry;
+      case PatchDifferenceType.untouched:
+        return oldEntry;
+    }
+  }
 }
 
 // class PatchHistory {
@@ -176,10 +199,12 @@ class Patch {
     patch = diff.values.toSet();
   }
 
-  Patch.difference(ContentSnapshot oldContent, ContentSnapshot newContent) {
+  Patch.difference(ContentSnapshot oldContent, ContentSnapshot newContent,
+      {String? versionOverride}) {
     Map<String, PatchEntry> oldIndex = {
       for (var v in oldContent.content) v.relativePath: v
     };
+    version = versionOverride ?? newContent.version;
     Map<String, PatchEntry> newIndex = {};
     patch = {};
     for (var v in newContent.content) {
@@ -244,7 +269,7 @@ class ContentSnapshot {
           .list(recursive: true)
           .where((e) =>
               (fileRelativePathExclude == null ||
-                  fileRelativePathExclude.contains(e.path)) &&
+                  fileRelativePathExclude.contains(cleanPath(e.path))) &&
               FileSystemEntity.isFileSync(e.path))
           .asyncMap((e) async {
         return PatchEntry.fromFile(File(e.path), Directory(dir.path),
@@ -252,10 +277,10 @@ class ContentSnapshot {
       }).toList();
     } else {
       for (String path in config.bundleInclude) {
-        if (config.bundleExclude.any((v) => path.startsWith(v))) {
+        String absolutePath = "${dir.path}/${cleanPath(path)}";
+        if (config.bundleExclude.any((v) => path.startsWith(cleanPath(v)))) {
           continue;
         }
-        String absolutePath = "${dir.path}/$path";
         if (await FileSystemEntity.isFile(absolutePath)) {
           filePatch.add(await PatchEntry.fromFile(File(absolutePath), dir,
               sourceVersion: version));
@@ -263,8 +288,10 @@ class ContentSnapshot {
           await Directory(absolutePath)
               .list(recursive: true)
               .forEach((f) async {
+            final relPath = cleanPath(f.path.replaceFirst(dir.path, ""));
             if (FileSystemEntity.isFileSync(f.path)) {
-              if (config.bundleExclude.any((v) => path.startsWith(v))) {
+              if (config.bundleExclude
+                  .any((v) => relPath.startsWith(cleanPath(v)))) {
                 return;
               }
               filePatch.add(await PatchEntry.fromFile(File(f.path), dir,
@@ -342,4 +369,124 @@ class ContentSnapshot {
             .toSet(),
         version);
   }
+}
+
+Future<Patch> package(Directory source,
+    {bool asPatch = true,
+    ServerAgent? server,
+    ContentSnapshot? oldContentOverride}) async {
+  ModpackData modpack = await ModpackData.fromInstallation(source);
+  Manifest manifest = modpack.manifest;
+  ModpackConfig config = modpack.modpackConfig;
+  ContentSnapshot oldContent = oldContentOverride ?? ContentSnapshot({}, "0");
+  String oldVersion = "0";
+  if (oldContentOverride == null &&
+      asPatch &&
+      server != null &&
+      await server.hasModpack(manifest.packId)) {
+    oldVersion = await server.getLatestVersion(manifest.packId);
+    oldContent = await server.getContent(manifest.packId, oldVersion);
+  }
+  ContentSnapshot newContent = await ContentSnapshot.fromDirectory(
+      source, manifest.version,
+      config: config);
+  final patch = Patch.difference(oldContent, newContent);
+  patch.version = newContent.version;
+  return patch;
+}
+
+Future<Archive> asArchive(Patch patch, Directory fileSource,
+    ServerAgent buildTarget, NamespacedKey modpackId,
+    {bool rebase = false}) async {
+  ContentSnapshot ct;
+  if (rebase) {
+    ct = patch.asContentSnapshot();
+  } else {
+    ct = ContentSnapshot(
+        patch
+            .onlyChanged(considerFirstVersionAsAdded: true)
+            .map((v) => v.getSignificant())
+            .where((v) => !v.isVoid())
+            .toSet(),
+        patch.version);
+  }
+  print(patch.patch.map((v) => v.toString()).join("\n"));
+  print(ct.toContentString(
+      buildTarget.modpackIdToUri(modpackId, asApi: false).path));
+  Archive arch = Archive();
+  for (PatchEntry entry in ct.asFiltered(onlyLatest: true).content) {
+    File sourceFile = File("${fileSource.path}${entry.relativePath}");
+    if (!await sourceFile.exists()) {
+      continue;
+    }
+    arch.addFile(ArchiveFile("/${patch.version}/${entry.relativePath}",
+        entry.size, await sourceFile.readAsBytes()));
+  }
+  List<int> contentBytes = const Utf8Encoder().convert(ct.toContentString(
+      buildTarget.modpackIdToUri(modpackId, asApi: false).path));
+
+  arch.add(ArchiveFile("/${patch.version}/${buildTarget.mappings.content}",
+      contentBytes.length, contentBytes));
+  return arch;
+}
+
+class CliPackage extends CliAction {
+  @override
+  Future<int> execute(List<String> args) async {
+    Directory? installDir;
+    final bool outputArchive =
+        !(args.contains("-c") || args.contains("--content"));
+    print(args);
+    for (String s in args) {
+      if (s.startsWith("-d=") || s.startsWith("--dir=")) {
+        installDir = Directory(s.split("=").sublist(1).join(""));
+      }
+      if (installDir == null && !s.startsWith("-") && s == args.last) {
+        installDir = Directory(s);
+      }
+    }
+    if (installDir == null || !installDir.existsSync()) {
+      print("Target directory not found !");
+      return -1;
+    }
+    print(installDir.path);
+    print("creating content snapshot...");
+    ModpackData installed = await ModpackData.fromInstallation(installDir);
+
+    final ServerAgent agent = ModshelfServerAgent();
+
+    Patch content = await package(installDir, server: agent);
+    print("PEND");
+
+    File outputFile = File(
+        "${installDir.path}/${DirNames.releases}/${installed.manifest.version}/content");
+    if (!await outputFile.parent.exists()) {
+      outputFile.parent.create(recursive: true);
+    }
+    print(outputFile.path);
+
+    final archiveOutputFile = File("${outputFile.parent.path}/upload.zip");
+    if (outputArchive) {
+      print("Saving modpack to archive...");
+      Manifest man = Manifest.fromJsonString(
+          await File("${installDir.path}/${DirNames.fileManifest}")
+              .readAsString());
+      final arch = await asArchive(content, installDir, agent, man.packId);
+      await archiveOutputFile.writeAsBytes(ZipEncoder().encode(arch));
+      print("Archive done !");
+    } else {
+      await outputFile.create();
+      outputFile.writeAsStringSync(
+          content.asContentSnapshot().toContentString(installDir.path));
+    }
+    print("Modpack packaged at ${outputFile.parent.path} !");
+    // SNAPSHOT SAVED
+    return 0;
+  }
+
+  @override
+  String get name => "package";
+
+  @override
+  String get helpMessage => throw UnimplementedError();
 }

@@ -12,6 +12,7 @@ import 'package:modshelf/ui/main_page/sidebar_thumbnail.dart';
 
 import '../../../theme/theme_constants.dart';
 import '../../../tools/adapters/local_files.dart';
+import '../../../tools/cache.dart';
 import '../../../tools/core/core.dart';
 import '../../../tools/core/manifest.dart';
 import '../../ui_utils.dart';

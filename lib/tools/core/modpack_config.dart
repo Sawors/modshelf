@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:modshelf/tools/utils.dart';
+
 class ModpackConfig {
   late final Uri? repository;
   late final String type;
@@ -33,15 +35,31 @@ class ModpackConfig {
     forceLocal =
         bool.tryParse(result["force-local-config"].toString()) ?? false;
     Map<String, dynamic> bundleSubmap = result["bundle"];
-    bundleInclude = _stringListify(bundleSubmap["include"]) ?? [];
-    bundleExclude = _stringListify(bundleSubmap["exclude"]) ?? [];
+    bundleInclude = _stringListify(bundleSubmap["include"])
+            .map((v) => cleanPath(v))
+            .toList() ??
+        [];
+    bundleExclude = _stringListify(bundleSubmap["exclude"])
+            .map((v) => cleanPath(v))
+            .toList() ??
+        [];
     Map<String, dynamic> upgradeSubmap = result["upgrade"];
-    upgradeIgnored = _stringListify(upgradeSubmap["ignored"]) ?? [];
-    upgradeIgnoreDeletion =
-        _stringListify(upgradeSubmap["ignore-deletion"]) ?? [];
-    upgradeIgnoreAddition =
-        _stringListify(upgradeSubmap["ignore-addition"]) ?? [];
+    upgradeIgnored = _stringListify(upgradeSubmap["ignored"])
+            .map((v) => cleanPath(v))
+            .toList() ??
+        [];
+    upgradeIgnoreDeletion = _stringListify(upgradeSubmap["ignore-deletion"])
+            .map((v) => cleanPath(v))
+            .toList() ??
+        [];
+    upgradeIgnoreAddition = _stringListify(upgradeSubmap["ignore-addition"])
+            .map((v) => cleanPath(v))
+            .toList() ??
+        [];
     upgradeIgnoreModification =
-        _stringListify(upgradeSubmap["ignore-modification"]) ?? [];
+        _stringListify(upgradeSubmap["ignore-modification"])
+                .map((v) => cleanPath(v))
+                .toList() ??
+            [];
   }
 }

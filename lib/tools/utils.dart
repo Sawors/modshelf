@@ -286,3 +286,12 @@ class Table<T> {
     return out;
   }
 }
+
+String cleanPath(String path) {
+  final startClean =
+      path.startsWith("/") || path.startsWith("\\") ? path.substring(1) : path;
+
+  return startClean.endsWith("/") || startClean.endsWith("\\")
+      ? startClean.substring(0, startClean.length - 1)
+      : startClean;
+}

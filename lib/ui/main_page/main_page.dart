@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:modshelf/ui/main_page/sidebar.dart';
 
 import '../../main.dart';
+import '../../tools/cache.dart';
 import '../../tools/core/core.dart';
 import 'modpack_page/modpack_page.dart';
 

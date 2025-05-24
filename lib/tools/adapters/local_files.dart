@@ -1,8 +1,6 @@
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:modshelf/tools/core/core.dart';
-import 'package:path_provider/path_provider.dart';
 
 final String sep = Platform.pathSeparator;
 
@@ -55,16 +53,27 @@ Future<List<ModpackData>> loadStoredManifests(
       manifests.add(await ModpackData.fromInstallation(
           installationDirFromManifestFile(f)));
     } catch (e) {
-      if (kDebugMode) {
-        print(e.toString());
-      }
+      print(e.toString());
     }
   }
   return manifests;
 }
 
 class LocalFiles {
-  Future<Directory> get cacheDir => getApplicationCacheDirectory();
+  Future<Directory> get cacheDir async {
+    if (Platform.isWindows) {
+      throw UnimplementedError(
+          "Implement cache for ${Platform.operatingSystem}");
+    } else if (Platform.isLinux) {
+      return Directory(
+          "${Platform.environment['HOME']}/.cache/com.example.modshelf");
+    } else if (Platform.isMacOS) {
+      throw UnimplementedError(
+          "Implement cache for ${Platform.operatingSystem}");
+    }
+
+    throw const OSError("Modshelf is not available for this platform.");
+  }
 
   Directory get storeDir => Directory("${getConfigDir().path}${sep}store");
 

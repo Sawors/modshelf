@@ -1,66 +1,25 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:archive/archive.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:modshelf/dev/mod_host.dart';
-import 'package:modshelf/tools/adapters/servers.dart';
 import 'package:modshelf/tools/core/core.dart';
 import 'package:modshelf/tools/utils.dart';
 
-import '../tools/core/manifest.dart';
-import '../tools/core/modpack_config.dart';
 import '../tools/engine/package.dart';
+
+abstract class CliAction {
+  String get name;
+
+  String get helpMessage;
+
+  Future<int> execute(List<String> args);
+}
 
 Future<void> runCli(List<String> args) async {
   await main(args);
-}
-
-Future<Patch> package(Directory source,
-    {bool asPatch = true,
-    ServerAgent? server,
-    ContentSnapshot? oldContentOverride}) async {
-  ModpackData modpack = await ModpackData.fromInstallation(source);
-  Manifest manifest = modpack.manifest;
-  ModpackConfig config = modpack.modpackConfig;
-  ContentSnapshot oldContent = oldContentOverride ?? ContentSnapshot({}, "0");
-  String oldVersion = "0";
-  if (oldContentOverride == null &&
-      asPatch &&
-      server != null &&
-      await server.hasModpack(manifest.packId)) {
-    oldVersion = await server.getLatestVersion(manifest.packId);
-    oldContent = await server.getContent(manifest.packId, oldVersion);
-  }
-  ContentSnapshot newContent = await ContentSnapshot.fromDirectory(
-      source, manifest.version,
-      config: config);
-  return Patch.difference(oldContent, newContent);
-}
-
-Future<Archive> asArchive(Patch patch, Directory fileSource,
-    ServerAgent buildTarget, NamespacedKey modpackId) async {
-  ContentSnapshot ct = patch.asContentSnapshot();
-  Archive arch = Archive();
-  for (PatchEntry entry in ct.asFiltered(onlyLatest: true).content) {
-    File sourceFile = File("${fileSource.path}${entry.relativePath}");
-    if (!await sourceFile.exists()) {
-      continue;
-    }
-    arch.addFile(ArchiveFile(
-        entry.relativePath.replaceAll(".modshelf", "modshelf"),
-        entry.size,
-        await sourceFile.readAsBytes()));
-  }
-  List<int> contentBytes = const Utf8Encoder().convert(ct
-      .toContentString(buildTarget.modpackIdToUri(modpackId, asApi: false).path)
-      .replaceAll(".modshelf", "modshelf"));
-
-  arch.add(ArchiveFile(
-      "/${buildTarget.mappings.content}", contentBytes.length, contentBytes));
-  return arch;
 }
 
 class InstalledModData {
@@ -188,9 +147,20 @@ void updateModlist(Directory installDir, {bool refetch = false}) async {
 }
 
 Future<void> main(List<String> args) async {
-  Directory installDir = Directory(
-      "/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/Tiboise II.V/.minecraft");
+  final String action = args.elementAtOrNull(0) ?? "";
+  print(args);
 
+  switch (action.toLowerCase()) {
+    case "package":
+      {
+        final result = CliPackage().execute(args.sublist(1));
+      }
+    case "install":
+      {}
+    case _:
+      print("Please select an action :\n - package\n - install");
+  }
+  return;
   ////
   //// CREATE A SNAPSHOT OF THE WHOLE INSTALL AND SAVE IT
   ////
@@ -248,6 +218,8 @@ Future<void> main(List<String> args) async {
   // UPDATE THE UPDATE REPORT LIST
   //
 
+  Directory installDir = Directory(
+      "/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/Tiboise II.V/.minecraft");
   const bool readOnly = true;
 
   ModrinthModHost mh = ModrinthModHost();

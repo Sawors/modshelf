@@ -1,10 +1,9 @@
 import 'dart:convert';
 
 import 'package:http/http.dart';
-import 'package:modshelf/main.dart';
-import 'package:modshelf/server/server.dart';
 import 'package:modshelf/tools/core/pack_config.dart';
 
+import '../cache.dart';
 import '../core/core.dart';
 import '../core/manifest.dart';
 import '../engine/package.dart';
@@ -192,10 +191,8 @@ class ModshelfServerAgent extends ServerAgent {
     Uri contentPath =
         Uri.parse("$host/${modpackId.toPath()}/$version/${mappings.content}");
     Response rep = await get(contentPath);
-    List<ContentEntry> entries =
-        rep.body.split("\r\n").map((e) => ContentEntry.fromString(e)).toList();
-    int totalSize =
-        entries.fold(0, (v1, v2) => v1 + (int.tryParse(v2.size) ?? 0));
+    ContentSnapshot entries = ContentSnapshot.fromContentString(rep.body);
+    int totalSize = entries.content.fold(0, (v1, v2) => v1 + v2.size);
     return ModpackDownloadData(manifest, archivePath, totalSize, PackConfig(),
         await fetchVersions(modpackId));
   }

@@ -12,6 +12,7 @@ import 'package:modshelf/ui/ui_utils.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../theme/theme_constants.dart';
+import '../../tools/cache.dart';
 import '../../tools/core/core.dart';
 import 'modpack_page/modpack_page.dart';
 
@@ -102,7 +103,7 @@ class Sidebar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox.fromSize(
-      size: const Size.fromWidth(300),
+      size: const Size.fromWidth(350),
       child: DecoratedBox(
           decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(rectangleRoundingRadius),

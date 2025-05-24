@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:modshelf/tools/engine/package.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
@@ -29,7 +30,7 @@ void main(List<String> args) async {
   // Enable content compression
   server.autoCompress = true;
 
-  print('Serving at http://${server.address.host}:${server.port}');
+  print('Serving at https://${server.address.host}:${server.port}');
 }
 
 dynamic getFromCache(String entryKey, dynamic Function() ifNotFound) {
@@ -42,79 +43,154 @@ dynamic getFromCache(String entryKey, dynamic Function() ifNotFound) {
   return val;
 }
 
-class ContentEntry {
-  late final String rc32;
-  late final String size;
-  late final String path;
-  late final String relativeFileName;
+class PackMeta {
+  final String packId;
+  final String game;
+  String? version;
 
-  ContentEntry(this.rc32, this.size, this.path, this.relativeFileName);
+  PackMeta({required this.packId, required this.game, this.version});
 
-  ContentEntry.fromString(String line) {
-    List<String> split = line.split(" ");
-    split = split.where((v) => v.isNotEmpty).toList();
-    rc32 = split.elementAtOrNull(0) ?? "";
-    size = split.elementAtOrNull(1) ?? "0";
-    path = split.elementAtOrNull(2) ?? "/";
-    relativeFileName = split.elementAtOrNull(3) ?? "/";
+  PackMeta.fromUri(Uri uri)
+      : this(
+            packId: uri.pathSegments[3],
+            game: uri.pathSegments[2],
+            version: uri.pathSegments.elementAtOrNull(4));
+
+  Uri toUri({bool includeVersion = true, bool isApi = false}) => Uri.parse(
+      "https://sawors.net/modshelf${isApi ? "/api" : ""}/$game/$packId${version != null && includeVersion ? "/$version" : ""}");
+
+  String get cacheKey => "$game:$packId.$version";
+
+  String get contentCacheKey => "$cacheKey/content";
+
+  String get entriesCacheKey => "$cacheKey/entries";
+
+  PackMeta withVersion(String packVersion) {
+    return PackMeta(packId: packId, game: game, version: packVersion);
   }
 
-  @override
-  String toString() {
-    return "$rc32 $size $path $relativeFileName";
-  }
+  Map<String, String> get packagingHeaders => {
+        "X-Archive-Files": "zip",
+        "Content-Disposition": "attachment; filename=$packId-$version.zip"
+      };
 }
 
 Response entryPoint(Request request) {
+  // this function is only run if we go through the API in the Uri.
+  // Example :
+  // https://sawors.net/modshelf/api/<game>/<pack>/     -> this path leads here
+  // https://sawors.net/modshelf/<game>/<pack>/         -> this path does not lead here, nginx takes the request in charge
   // path always look like "modshelf", "api", [game], [pack-id], {[version], [content...]}
   final Uri reqUri = request.requestedUri;
   final Map<String, String> params = request.url.queryParameters;
   final List<String> path = reqUri.pathSegments;
-
-  String? game = path.elementAtOrNull(2);
-  String? packId = path.elementAtOrNull(3);
-  String? versionPath = path.elementAtOrNull(4) ?? params["v"];
-  String? contentPath = path.length >= 5 ? path.sublist(5).join("/") : null;
-
-  Map<String, String> headers = Map.from(request.headers);
-
   final newLoc =
       Uri.parse(reqUri.toString().replaceFirst("modshelf/api", "modshelf"));
+  final Map<String, Object> headers = Map.from(request.headers);
+  final Response defaultResponse =
+      Response.found(newLoc, headers: request.headers);
 
-  if (contentPath != null && contentPath.isNotEmpty) {
-    final String modpackKey = "$game:$packId.$versionPath";
-    final String contentCacheKey = "$modpackKey/content";
-    final String entriesCacheKey = "$modpackKey/entries";
-    final List<String> content = getFromCache(contentCacheKey, () {
-      File contentFile = File(
-          "$localBasePath/$game/$packId/$versionPath/content"
-              .replaceAll("/..", "")
-              .replaceAll("/.", ""));
-      List<String> ct = contentFile.readAsLinesSync();
+  final PackMeta meta;
+  try {
+    meta = PackMeta.fromUri(reqUri);
+    if (params["v"] != null) {
+      meta.version = params["v"];
+    }
+  } on IndexError {
+    return defaultResponse;
+  }
+
+  if (meta.version == null) {
+    final String action = params["a"] ?? "";
+    return handleAction(action, meta, request) ?? defaultResponse;
+  }
+
+  final String game = meta.game;
+  final String packId = meta.packId;
+  final String version = meta.version ?? "";
+  final String contentPath = path.length >= 5 ? path.sublist(5).join("/") : "";
+
+  if (contentPath.isNotEmpty) {
+    final String contentCacheKey = meta.contentCacheKey;
+    final ContentSnapshot content = getFromCache(contentCacheKey, () {
+      File contentFile = File("$localBasePath/$game/$packId/$version/content"
+          .replaceAll("/..", "")
+          .replaceAll("/.", ""));
+      ContentSnapshot ct =
+          ContentSnapshot.fromContentString(contentFile.readAsStringSync());
       cache[contentCacheKey] = ct;
       return ct;
     });
 
     if (contentPath == "content" && (params.isEmpty || params["c"] != "raw")) {
-      headers["X-Archive-Files"] = "zip";
-      headers["Content-Disposition"] =
-          "attachment; filename=$packId-$versionPath.zip";
-      return Response.ok(content.join("\r\n"), headers: headers);
+      headers.addAll(meta.packagingHeaders);
+      return Response.ok(
+          content.toContentString(
+              meta.toUri(includeVersion: false, isApi: false).path),
+          headers: headers);
     }
-    final List<ContentEntry> entries = getFromCache(entriesCacheKey, () {
-      List<ContentEntry> ct =
-          content.map((c) => ContentEntry.fromString(c)).toList();
-      cache[entriesCacheKey] = ct;
-      return ct;
-    });
-    final ContentEntry? searchedEntry =
-        entries.firstWhereOrNull((v) => v.relativeFileName == contentPath);
+    final PatchEntry? searchedEntry =
+        content.content.firstWhereOrNull((v) => v.relativePath == contentPath);
     if (searchedEntry != null) {
       return Response.found(
-          "${reqUri.scheme}://${reqUri.host}${searchedEntry.path}",
+          "${reqUri.scheme}://${reqUri.host}${searchedEntry.relativePath}",
           headers: headers);
     }
   }
 
   return Response.found(newLoc, headers: headers);
+}
+
+Response? handleAction(
+    String action, PackMeta packMeta, Request sourceRequest) {
+  final params = sourceRequest.requestedUri.queryParameters;
+  final Map<String, Object> headers = Map.from(sourceRequest.headers);
+  switch (action) {
+    case "patch":
+      final String fromV = params["f"] ?? "";
+      final String toV = params["t"] ?? "";
+      if (fromV.isEmpty || toV.isEmpty) {
+        return null;
+      }
+      final PackMeta metaFrom = packMeta.withVersion(fromV);
+      final PackMeta metaTo = packMeta.withVersion(toV);
+      final ContentSnapshot contentFrom =
+          getFromCache(metaFrom.contentCacheKey, () {
+        File contentFile = File(
+            "$localBasePath/${metaFrom.game}/${metaFrom.packId}/${metaFrom.version}/content"
+                .replaceAll("/..", "")
+                .replaceAll("/.", ""));
+        final ct =
+            ContentSnapshot.fromContentString(contentFile.readAsStringSync());
+        cache[metaFrom.contentCacheKey] = ct;
+        return ct;
+      });
+      final ContentSnapshot contentTo =
+          getFromCache(metaTo.contentCacheKey, () {
+        File contentFile = File(
+            "$localBasePath/${metaTo.game}/${metaTo.packId}/${metaTo.version}/content"
+                .replaceAll("/..", "")
+                .replaceAll("/.", ""));
+        final ct =
+            ContentSnapshot.fromContentString(contentFile.readAsStringSync());
+        cache[metaTo.contentCacheKey] = ct;
+        return ct;
+      });
+      final Patch patch = Patch.difference(contentFrom, contentTo,
+          versionOverride: "$fromV-$toV");
+      headers.addAll(packMeta.withVersion(patch.version).packagingHeaders);
+      final String res = ContentSnapshot(
+              patch
+                  .onlyChanged()
+                  .map((v) => v.getSignificant())
+                  .where((v) => v.version != fromV)
+                  .toSet(),
+              patch.version)
+          .toContentString(packMeta
+              .withVersion(patch.version)
+              .toUri(includeVersion: false, isApi: false)
+              .path);
+      return Response.ok(res, headers: headers);
+  }
+  return null;
 }
