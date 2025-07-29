@@ -25,7 +25,7 @@ class VisualDownloadManager extends StatefulWidget {
 class _VisualDownloadManagerState extends State<VisualDownloadManager> {
   late final InstallManager installManager;
   InstallPhase installPhase = InstallPhase.initialization;
-  (int, int, List<int>, bool)? downloadState;
+  DownloadTaskReport? downloadState;
 
   //
   final Duration timerPeriodMs = const Duration(milliseconds: 100);
@@ -50,48 +50,48 @@ class _VisualDownloadManagerState extends State<VisualDownloadManager> {
   int doneInstallTasks = 0;
 
   startSequence() {
-    installPhase = InstallPhase.downloadingArchive;
-    sub = installManager
-        .downloadArchive(periodMs: timerPeriodMs.inMilliseconds)
-        .listen((data) {
-      downloadState = data;
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        durationMs += timerPeriodMs.inMilliseconds;
-        if (downloadState != null) {
-          byteHistory.add(downloadState!.$1 - lastByteDl);
-          lastByteDl = downloadState!.$1;
-          if (byteHistory.length > bpsWindow) {
-            byteHistory.removeFirst();
-          }
-        }
-        bytesPerSecond = byteHistory.fold(0, (b1, b2) => b1 + b2) /
-            ((bpsWindow * timerPeriodMs.inMilliseconds) / 1000);
-      });
-
-      if (data.$4) {
-        sub?.cancel();
-        // Download done
-        subInstall = installManager
-            .installModpack(downloadState!.$3, fakeDelayMs: 100)
-            .listen((d) {
-          if (installPhase != d.$1) {
-            installPhase = d.$1;
-            setState(() {});
-            doneInstallTasks++;
-          }
-
-          if (installPhase == InstallPhase.finish) {
-            subInstall?.cancel();
-          }
-        });
-        return;
-      }
-    });
+    // installPhase = InstallPhase.downloadingArchive;
+    // sub = installManager
+    //     .downloadArchive(periodMs: timerPeriodMs.inMilliseconds)
+    //     .listen((data) {
+    //   downloadState = data;
+    //
+    //   if (!mounted) {
+    //     return;
+    //   }
+    //
+    //   setState(() {
+    //     durationMs += timerPeriodMs.inMilliseconds;
+    //     if (downloadState != null) {
+    //       byteHistory.add(downloadState!.completed.toInt() - lastByteDl);
+    //       lastByteDl = downloadState!.completed.toInt();
+    //       if (byteHistory.length > bpsWindow) {
+    //         byteHistory.removeFirst();
+    //       }
+    //     }
+    //     bytesPerSecond = byteHistory.fold(0, (b1, b2) => b1 + b2) /
+    //         ((bpsWindow * timerPeriodMs.inMilliseconds) / 1000);
+    //   });
+    //
+    //   if (data.isComplete) {
+    //     sub?.cancel();
+    //     final value = downloadState?.data ?? [];
+    //     // Download done
+    //     subInstall =
+    //         installManager.installModpack(value, fakeDelayMs: 100).listen((d) {
+    //       if (installPhase != d.$1) {
+    //         installPhase = d.$1;
+    //         setState(() {});
+    //         doneInstallTasks++;
+    //       }
+    //
+    //       if (installPhase == InstallPhase.finish) {
+    //         subInstall?.cancel();
+    //       }
+    //     });
+    //     return;
+    //   }
+    // });
   }
 
   @override
@@ -123,8 +123,8 @@ class _VisualDownloadManagerState extends State<VisualDownloadManager> {
           dimension: 50,
           child: CircularProgressIndicator(),
         );
-        int bCurrent = downloadState?.$1 ?? 0;
-        int bTotal = downloadState?.$2 ?? 1;
+        int bCurrent = downloadState?.completed.toInt() ?? 0;
+        int bTotal = downloadState?.total.toInt() ?? 1;
         if (downloadState != null && bTotal > 0) {
           double progress = bCurrent / bTotal;
           int remainingBytes = bTotal - bCurrent;
@@ -184,7 +184,7 @@ class _VisualDownloadManagerState extends State<VisualDownloadManager> {
       case InstallPhase.importingOldConfig:
       case InstallPhase.launcherLinking:
       case InstallPhase.linking:
-      case InstallPhase.postInstall:
+      case InstallPhase.finalizing:
         double progress = doneInstallTasks / totalInstallTasks;
         Widget indicator = Column(
           children: [
@@ -271,7 +271,7 @@ class _VisualDownloadManagerState extends State<VisualDownloadManager> {
                   child: MaterialButton(
                       onPressed: () {
                         loadStoredManifests().then((v) {
-                          PageState.setValue(ModpackListPage.manifestsKey, v);
+                          PageState.setValue(MainPage.manifestsKey, v);
                         });
                         Navigator.of(context, rootNavigator: true).pop();
                       },

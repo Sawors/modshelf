@@ -2,14 +2,17 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:archive/archive_io.dart';
-import 'package:dio/dio.dart';
+import 'package:http/http.dart';
 import 'package:io/io.dart';
 import 'package:modshelf/tools/adapters/launchers.dart';
 import 'package:modshelf/tools/adapters/local_files.dart';
+import 'package:modshelf/tools/adapters/servers.dart';
 import 'package:modshelf/tools/utils.dart';
 
 import '../core/core.dart';
 import '../core/manifest.dart';
+import '../tasks.dart';
+import 'package.dart';
 
 enum InstallPhase {
   initialization,
@@ -18,7 +21,7 @@ enum InstallPhase {
   importingOldConfig,
   launcherLinking,
   linking,
-  postInstall,
+  finalizing,
   finish;
 }
 
@@ -49,18 +52,124 @@ class InstallConfig {
       this.keepTrackInProgramStore = true});
 }
 
-class InstallManager {
-  late final Uri repository;
-  File? archive;
-  late final InstallConfig installConfig;
+class InstallPackTask extends TaskQueue {
+  final Patch? patch;
 
-  InstallManager(this.repository, this.installConfig);
+  InstallPackTask(
+      ContentSnapshot content, InstallConfig installConfig, Manifest manifest,
+      {required super.description,
+      required super.title,
+      super.latestProgress,
+      this.patch}) {
+    this.manifest = manifest;
+    final archivePath =
+        "${Directory.systemTemp.path}/modshelf-${generateRandomStringAlNum(16)}";
+    final Task dl = DownloadTask(
+        ModshelfServerAgent(), content, manifest.packId,
+        description: "Downloading the pack...",
+        title: "Download  ",
+        manifest: manifest,
+        filePathOverride: archivePath);
+    final Task install = UnpackArchiveTask(installConfig, File(archivePath),
+        description: "Installing the pack...",
+        title: "Installation",
+        patch: patch ?? Patch.compiled([content]));
+    tasks = [dl, install];
+  }
+
+  @override
+  Stream<TaskReport<TaskReport>> execute({dynamic pipedData}) async* {
+    final initialSize = tasks.length;
+    for (var stream in tasks.indexed) {
+      current = stream.$1;
+      final str = stream.$2.start();
+      await for (var report in str) {
+        yield TaskReport(
+            completed: stream.$1, total: initialSize, data: report);
+        if (report.isComplete) {
+          break;
+        }
+      }
+    }
+    yield TaskReport(
+        completed: initialSize, total: initialSize, data: latestProgress);
+  }
+}
+
+class DownloadTask extends Task {
+  final ModshelfServerAgent server;
+  final NamespacedKey packId;
+  final ContentSnapshot requestContent;
+  final String? filePathOverride;
+
+  DownloadTask(this.server, this.requestContent, this.packId,
+      {required super.description,
+      required super.title,
+      super.manifest,
+      super.chainedData,
+      super.latestProgress,
+      this.filePathOverride});
+
+  @override
+  Stream<TaskReport<String>> execute({pipedData}) async* {
+    final mergedQParameters = {"action": "get"};
+    final Request request = Request(
+        "post",
+        server
+            .modpackIdToUri(packId, asApi: true)
+            .replace(queryParameters: mergedQParameters));
+    request.body = requestContent
+        .toContentString(server.modpackIdToUri(packId, asApi: false).path);
+    final response = await request.send();
+    int completed = 0;
+    final String outputFilePath = filePathOverride ??
+        "${Directory.systemTemp.path}/modshelf-${generateRandomStringAlNum(16)}";
+    final File outputFile = File(outputFilePath);
+    final sink = outputFile.openWrite();
+    try {
+      await for (var chunk in response.stream) {
+        completed += chunk.length;
+        sink.add(chunk);
+        yield TaskReport(
+            completed: completed,
+            total: response.contentLength ?? 0,
+            data: outputFilePath);
+      }
+    } finally {
+      sink.close();
+    }
+  }
+}
+
+class InstallTaskReport extends TaskReport<Directory> {
+  final InstallPhase phase;
+  String? comment;
+
+  InstallTaskReport(this.phase,
+      {this.comment,
+      required super.completed,
+      required super.total,
+      super.data});
+}
+
+class UnpackArchiveTask extends Task {
+  final InstallConfig installConfig;
+  final File archiveFile;
+  final bool isUpgrade;
+  final Patch? patch;
+
+  UnpackArchiveTask(this.installConfig, this.archiveFile,
+      {required super.description,
+      required super.title,
+      this.isUpgrade = false,
+      this.patch});
 
   static Future<String?> linkManifest(File manifest,
       {String? installName, Manifest? loadedManifest}) async {
     Directory store = LocalFiles().manifestStoreDir;
     Manifest man = loadedManifest ??
         Manifest.fromJsonString(await manifest.readAsString());
+
     String manifestSaveName = installName ?? man.name;
     String manifestTargetPath =
         asPath([store.path, man.game, man.modLoader, manifestSaveName]);
@@ -83,39 +192,8 @@ class InstallManager {
         .path;
   }
 
-  // actual bytes, total bytes, target file, download done
-  Stream<(int, int, List<int>, bool)> downloadArchive(
-      {int periodMs = 200}) async* {
-    //yield* downloadFileTemp(repository, periodMs: periodMs);
-    // final tempDir = Directory.systemTemp;
-    //   final targetFile = File(
-    //       "${tempDir.path}${Platform.pathSeparator}modshelf_${generateRandomStringAlNum(16)}.zip");
-    //   var status = (0, 0, targetFile, false);
-    //   Dio()
-    //       .downloadUri(source, targetFile.path,
-    //           onReceiveProgress: (currentBytes, totalBytes) =>
-    //               status = (currentBytes, totalBytes, targetFile, false))
-    //       .whenComplete(() => status = (status.$1, status.$2, status.$3, true));
-    //   yield* Stream.periodic(Duration(milliseconds: periodMs), (_) {
-    //     return status;
-    //   });
-    var status = (0, 0, List<int>.empty(growable: false), false);
-    Dio().getUri(repository, options: Options(responseType: ResponseType.bytes),
-        onReceiveProgress: (actual, total) {
-      status = (actual, total, [], false);
-    }).then((v) {
-      dynamic data = v.data;
-      status = (status.$1, status.$2, data as List<int>, true);
-    });
-
-    // 726,350,799
-    yield* Stream.periodic(Duration(milliseconds: periodMs), (_) {
-      return status;
-    });
-  }
-
-  Stream<(InstallPhase, String)> installModpack(List<int> archiveContent,
-      {int fakeDelayMs = 0, bool yieldPostInstall = false}) async* {
+  @override
+  Stream<InstallTaskReport> execute({dynamic pipedData}) async* {
     bool hasLauncher = installConfig.launcherType != null;
     Directory extractDir = installConfig.installLocation;
     Directory? adapted = installConfig.launcherType
@@ -128,30 +206,39 @@ class InstallManager {
       await extractDir.create(recursive: true);
     }
 
-    if (!await extractDir.list().isEmpty) {
+    if (!isUpgrade && !await extractDir.list().isEmpty) {
       throw const FileSystemException("Target directory is not empty");
     }
 
     // extracting to destination
-
-    final bytes = archiveContent;
-    final archive = ZipDecoder().decodeBytes(bytes);
-    for (final file in archive) {
+    final int extractionSteps = patch?.patch
+            .where((p) => p.type != PatchDifferenceType.removed)
+            .length ??
+        0;
+    final int totalSteps = extractionSteps + 2;
+    int step = 0;
+    final res = ZipDecoder().decodeStream(InputFileStream(archiveFile.path));
+    for (var file in res) {
       final filename = file.name;
       final targetPath = "${extractDir.path}/$filename";
       if (file.isFile) {
+        step++;
         final data = file.content as List<int>;
-        yield (InstallPhase.extractingArchive, "$targetPath,${data.length}");
         File target = File(targetPath);
+        yield InstallTaskReport(InstallPhase.extractingArchive,
+            comment: "$targetPath,${data.length}",
+            completed: step,
+            total: totalSteps);
         await target.create(recursive: true);
         await target.writeAsBytes(data);
       } else {
-        await Directory(targetPath).create(recursive: true);
+        Directory(targetPath).createSync(recursive: true);
       }
     }
 
-    await Future.delayed(Duration(milliseconds: fakeDelayMs));
     // copying base configs
+    yield InstallTaskReport(InstallPhase.finalizing,
+        completed: step + 1, total: totalSteps);
     if (installConfig.mainProfileSource != null &&
         await installConfig.mainProfileSource!.exists()) {
       for (String path in installConfig.mainProfileImport) {
@@ -160,37 +247,69 @@ class InstallManager {
         final String targetPath = "${extractDir.path}/$path";
         if (await FileSystemEntity.type(sourcePath) !=
             FileSystemEntityType.notFound) {
-          yield (InstallPhase.importingOldConfig, sourcePath);
+          // yield InstallTaskReport(InstallPhase.importingOldConfig,
+          //     comment: sourcePath, completed: 1, total: 1);
           copyPath(sourcePath, targetPath);
         }
       }
     }
 
-    await Future.delayed(Duration(milliseconds: fakeDelayMs));
     // injecting profile
     if (hasLauncher && installConfig.linkToLauncher) {
       LauncherAdapter? adp = installConfig.launcherType?.getAdapter();
       if (adp != null) {
-        yield (InstallPhase.launcherLinking, installConfig.launcherType!.name);
+        // yield InstallTaskReport(InstallPhase.launcherLinking,
+        //     comment: installConfig.launcherType!.name, completed: 1, total: 1);
         adp.injectProfile(installConfig);
       }
     }
 
     if (installConfig.keepTrackInProgramStore) {
-      await Future.delayed(Duration(milliseconds: fakeDelayMs));
       // linking
-      yield (InstallPhase.linking, "");
+      //yield InstallTaskReport(InstallPhase.linking, completed: 1, total: 1);
       String manifestSourcePath =
           "${extractDir.path}${Platform.pathSeparator}${DirNames.fileManifest}";
       Manifest man = installConfig.manifest;
-      linkManifest(File(manifestSourcePath), loadedManifest: man);
+      await linkManifest(File(manifestSourcePath), loadedManifest: man);
     }
 
-    await Future.delayed(Duration(milliseconds: fakeDelayMs));
+    if (patch != null) {
+      try {
+        await Future.wait(patch!.patch
+            .where((v) => v.type == PatchDifferenceType.removed)
+            .map((r) =>
+                File("${extractDir.path}${r.getSignificant().relativePath}")
+                    .delete(recursive: true)));
+      } catch (_) {
+        // ignore
+      }
+    }
+
+    archiveFile.delete();
+
     // finish
-    yield (
-      yieldPostInstall ? InstallPhase.postInstall : InstallPhase.finish,
-      "✔"
-    );
+    yield InstallTaskReport(InstallPhase.finish,
+        completed: totalSteps, total: totalSteps, data: extractDir);
   }
+}
+
+class DownloadTaskReport extends TaskReport<List<int>> {
+  final Uri source;
+
+  DownloadTaskReport(
+      {required super.completed,
+      required super.total,
+      required this.source,
+      super.data});
+
+  @override
+  bool get isComplete => super.isComplete && data != null;
+}
+
+class InstallManager {
+  late final Uri repository;
+  File? archive;
+  late final InstallConfig installConfig;
+
+  InstallManager(this.repository, this.installConfig);
 }

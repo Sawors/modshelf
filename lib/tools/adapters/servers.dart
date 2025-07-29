@@ -1,7 +1,8 @@
 import 'dart:convert';
 
 import 'package:http/http.dart';
-import 'package:modshelf/tools/core/pack_config.dart';
+import 'package:modshelf/server/server.dart';
+import 'package:modshelf/tools/core/modpack_config.dart';
 
 import '../cache.dart';
 import '../core/core.dart';
@@ -10,7 +11,7 @@ import '../engine/package.dart';
 
 class ModpackDownloadData {
   final Manifest manifest;
-  final PackConfig config;
+  final ModpackConfig config;
   final Uri archive;
   final int archiveSize;
   final List<String> versions;
@@ -36,7 +37,7 @@ abstract class ServerAgent {
   Future<Manifest> fetchManifest(NamespacedKey modpackId, String version,
       {bool useCache = true});
 
-  Future<Manifest> fetchConfig(NamespacedKey modpackId, String version,
+  Future<ModpackConfig> fetchConfig(NamespacedKey modpackId, String version,
       {bool useCache = true});
 
   Future<List<String>> getGames();
@@ -78,6 +79,8 @@ abstract class ServerAgent {
         .toList();
     return NamespacedKey(split[0], split[1]);
   }
+
+  Future<String?> hasUpgrade(Manifest manifest);
 }
 
 // class DynamicServerAgent extends ServerAgent {
@@ -90,23 +93,24 @@ class ModshelfServerAgent extends ServerAgent {
   @override
   Future<Manifest> fetchManifest(NamespacedKey modpackId, String version,
       {bool useCache = true}) async {
+    final vString = Version.fromString(version).toString(shortened: false);
     if (useCache) {
-      String? manStr = CacheManager.getCachedValue(
-          Manifest.cacheKeyFromString(modpackId, version));
+      String? manStr = CacheManager.instance
+          .getCachedValue(Manifest.cacheKeyFromString(modpackId, vString));
       if (manStr != null) {
         return Manifest.fromJsonString(manStr);
       }
     }
 
     String latestPath =
-        "$host/${mappings.api}/${modpackId.toPath()}/$version/${DirNames.fileManifest}";
+        "$host/${mappings.api}/${modpackId.toPath()}/$vString/${DirNames.fileManifest}";
     Response rp = await get(Uri.parse(latestPath));
     String result = rp.body;
     Manifest manifest = Manifest.fromJsonString(result);
     if (useCache) {
-      CacheManager.setCachedValue(
-          Manifest.cacheKeyFromString(modpackId, version),
-          manifest.asJsonString());
+      CacheManager.instance.setCachedValue(
+          Manifest.cacheKeyFromString(modpackId, vString),
+          manifest.toJsonString());
     }
     return manifest;
   }
@@ -185,15 +189,17 @@ class ModshelfServerAgent extends ServerAgent {
   @override
   Future<ModpackDownloadData> getDownloadData(
       NamespacedKey modpackId, String version) async {
-    Manifest manifest = await fetchManifest(modpackId, version);
+    final vString = Version.fromString(version).toString(shortened: false);
+    Manifest manifest = await fetchManifest(modpackId, vString);
     Uri archivePath = Uri.parse(
-        "$host/${mappings.api}/${modpackId.toPath()}/$version/${mappings.content}");
+        "$host/${mappings.api}/${modpackId.toPath()}/$vString/${mappings.content}");
     Uri contentPath =
-        Uri.parse("$host/${modpackId.toPath()}/$version/${mappings.content}");
+        Uri.parse("$host/${modpackId.toPath()}/$vString/${mappings.content}");
     Response rep = await get(contentPath);
     ContentSnapshot entries = ContentSnapshot.fromContentString(rep.body);
     int totalSize = entries.content.fold(0, (v1, v2) => v1 + v2.size);
-    return ModpackDownloadData(manifest, archivePath, totalSize, PackConfig(),
+    final configResponse = await fetchConfig(modpackId, version);
+    return ModpackDownloadData(manifest, archivePath, totalSize, configResponse,
         await fetchVersions(modpackId));
   }
 
@@ -210,8 +216,8 @@ class ModshelfServerAgent extends ServerAgent {
   @override
   Future<ContentSnapshot> getContent(
       NamespacedKey modpackId, String version) async {
-    Uri archivePath =
-        Uri.parse("$host/${modpackId.toPath()}/$version/${mappings.content}");
+    Uri archivePath = Uri.parse(
+        "$host/${modpackId.toPath()}/${Version.fromString(version).toString(shortened: false)}/${mappings.content}");
     Response resp = await get(archivePath);
     return ContentSnapshot.fromContentString(resp.body);
   }
@@ -220,9 +226,60 @@ class ModshelfServerAgent extends ServerAgent {
   Uri get host => Uri.parse("https://sawors.net/modshelf");
 
   @override
-  Future<Manifest> fetchConfig(NamespacedKey modpackId, String version,
-      {bool useCache = true}) {
-    // TODO: implement fetchConfig
-    throw UnimplementedError();
+  Future<ModpackConfig> fetchConfig(NamespacedKey modpackId, String version,
+      {bool useCache = false}) async {
+    if (useCache) {
+      String? confStr = CacheManager.instance.getCachedValue(
+          ModpackConfig.cacheKeyFromString(modpackId,
+              Version.fromString(version).toString(shortened: false)));
+      if (confStr != null) {
+        return ModpackConfig.fromJsonString(confStr);
+      }
+    }
+
+    String latestPath =
+        "$host/${mappings.api}/${modpackId.toPath()}/${Version.fromString(version).toString(shortened: false)}/${DirNames.fileConfig}";
+    Response rp = await get(Uri.parse(latestPath));
+    String result = rp.body;
+    ModpackConfig config = ModpackConfig.fromJsonString(result);
+    if (useCache) {
+      CacheManager.instance.setCachedValue(
+          ModpackConfig.cacheKeyFromString(modpackId,
+              Version.fromString(version).toString(shortened: false)),
+          config.toJsonString());
+    }
+    return config;
+  }
+
+  Uri generatePatchUri(
+      NamespacedKey packId, String fromVersion, String toVersion,
+      {bool onlyContent = true}) {
+    return Uri.parse(
+        "$host/api/${packId.namespace}/${packId.key}?a=${onlyContent ? "patch-content" : "patch"}&f=${Version.fromString(fromVersion).toString(shortened: false)}&t=${Version.fromString(toVersion).toString(shortened: false)}");
+  }
+
+  @override
+  Future<String?> hasUpgrade(Manifest manifest) {
+    return getLatestVersion(manifest.packId).then((latest) {
+      Version oldVersion = Version.fromString(manifest.version);
+      Version? latestCheck = Version.tryFromString(latest);
+      if (latestCheck != null && latestCheck.compareTo(oldVersion) > 0) {
+        return latest;
+      }
+      return null;
+    });
+  }
+
+  Future<Patch> requestPatchContent(NamespacedKey packId,
+      ModpackConfig? localConfig, String fromVersion, String toVersion) {
+    final req = PatchRequest(
+        fromVersion: fromVersion, toVersion: toVersion, config: localConfig);
+    final uri = modpackIdToUri(packId, asApi: true)
+        .replace(queryParameters: {"action": "patch-content"});
+    return post(uri, body: req.toJson()).then((v) {
+      final jsonResult = (jsonDecode(v.body) as List<dynamic>);
+      return Patch.fromJsonObject(jsonResult,
+          versionOverride: toVersion, firstVersionOverride: fromVersion);
+    });
   }
 }

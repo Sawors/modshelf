@@ -2,11 +2,18 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:modshelf/tools/engine/install.dart';
-import 'package:modshelf/ui/main_page/modpack_page/modpack_install_screen/modpack_install_screen.dart';
+import 'package:modshelf/tools/engine/package.dart';
+import 'package:modshelf/tools/task_supervisor.dart';
+import 'package:modshelf/tools/tasks.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/modpack_install_screen/modpack_install_screen.dart';
 
-import '../../../../tools/adapters/launchers.dart';
-import '../../../../tools/core/manifest.dart';
-import 'download_visual_manager.dart';
+import '../../../../../main.dart';
+import '../../../../../tools/adapters/launchers.dart';
+import '../../../../../tools/adapters/local_files.dart';
+import '../../../../../tools/cache.dart';
+import '../../../../../tools/core/manifest.dart';
+import '../../../main_page.dart';
+import '../../../sidebar/sidebar.dart';
 import 'install_config_grid.dart';
 
 enum InstallMode {
@@ -16,8 +23,10 @@ enum InstallMode {
 
 class InstallModeSelection extends StatefulWidget {
   final InstallScreenData downloadData;
+  final ContentSnapshot downloadContent;
 
-  const InstallModeSelection({super.key, required this.downloadData});
+  const InstallModeSelection(
+      {super.key, required this.downloadData, required this.downloadContent});
 
   @override
   _InstallModeSelectionState createState() => _InstallModeSelectionState();
@@ -324,68 +333,103 @@ class _InstallModeSelectionState extends State<InstallModeSelection> {
         SizedBox(
           height: installButtonHeight,
           child: FutureBuilder(
-            future: installConfigMap.areFieldsValid(),
+            future: Future.delayed(const Duration(milliseconds: 100))
+                .then((v) => installConfigMap.areFieldsValid()),
             builder: (BuildContext context,
                 AsyncSnapshot<List<ConfigValidationResult>> snapshot) {
               List<ConfigValidationResult> snapshotData = snapshot.data ?? [];
               bool isValid = snapshotData.isNotEmpty &&
                   !snapshotData.any((d) => !d.isValid);
-              if (true) {
-                if (isValid) {
-                  bool isFutureDone =
-                      snapshot.connectionState == ConnectionState.done;
-                  return Tooltip(
-                    message:
-                        isFutureDone ? "" : "Input verification in process...",
-                    child: MaterialButton(
-                        autofocus: true,
-                        onPressed: isFutureDone
-                            ? () {
-                                Navigator.of(context, rootNavigator: true)
-                                    .pop();
-                                showDialog(
-                                    context: context,
-                                    builder: (cont) {
-                                      return Center(
-                                          child: VisualDownloadManager(
-                                        downloadData:
-                                            widget.downloadData.modpackData,
-                                        installConfig: installConfigMap
-                                            .toInstallConfig(widget.downloadData
-                                                .modpackData.manifest),
-                                      ));
-                                    });
-                              }
-                            : () {},
-                        color: theme.colorScheme.surfaceContainer,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(100)),
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          child: Text(
-                            "Install →",
-                            style: theme.textTheme.titleLarge,
-                          ),
-                        )),
-                  );
-                } else {
-                  TextStyle? errorStyle = theme.textTheme.bodyMedium
-                      ?.copyWith(color: theme.colorScheme.error);
-                  List<Text> messages = snapshotData
-                      .where((c) => !c.isValid && c.errorMessage.isNotEmpty)
-                      .map((c) => Text(
-                            c.errorMessage,
-                            style: errorStyle,
-                          ))
-                      .toList();
-                  return SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: messages,
-                    ),
-                  );
-                }
+              if (isValid) {
+                bool isFutureDone =
+                    snapshot.connectionState == ConnectionState.done;
+                return Tooltip(
+                  message:
+                      isFutureDone ? "" : "Input verification in process...",
+                  child: MaterialButton(
+                      autofocus: true,
+                      onPressed: isFutureDone
+                          ? () {
+                              final manifest =
+                                  widget.downloadData.modpackData.manifest;
+                              final task = InstallPackTask(
+                                  widget.downloadContent,
+                                  installConfigMap.toInstallConfig(manifest),
+                                  manifest,
+                                  description: "",
+                                  title: manifest.displayData.title);
+                              TaskSupervisor.supervisor
+                                  .start(task)
+                                  .last
+                                  .then((tr) => loadStoredManifests().then((v) {
+                                        PageState.setValue(
+                                            MainPage.manifestsKey, v);
+                                        final index = v.indexWhere((md) {
+                                          final installDir =
+                                              md.installDir?.path;
+                                          final trData = tr.data is TaskReport
+                                              ? ((tr.data as TaskReport).data
+                                                      as TaskReport)
+                                                  .data
+                                              : tr.data;
+                                          final path = trData is Directory
+                                              ? trData.path
+                                              : null;
+                                          return installDir != null &&
+                                              path != null &&
+                                              trData.path == installDir;
+                                        });
+                                        print(index);
+                                        if (index > -1) {
+                                          PageState.setValue(MainPage.indexKey,
+                                              "index:$index");
+                                          CacheManager.instance.setCachedValue(
+                                              MainPage.indexCacheKey,
+                                              "index:$index");
+                                        }
+                                      }));
+                              Navigator.of(context, rootNavigator: true).pop();
+                              PageState.setValue(
+                                  MainPage.indexKey, Sidebar.downloadPageKey);
+                              CacheManager.instance.setCachedValue(
+                                  MainPage.indexCacheKey,
+                                  Sidebar.downloadPageKey.toString());
+                            }
+                          : () {},
+                      color: theme.colorScheme.surfaceContainer,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(100)),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        child: Text(
+                          "Install →",
+                          style: theme.textTheme.titleLarge,
+                        ),
+                      )),
+                );
+              } else {
+                TextStyle? errorStyle = theme.textTheme.bodyMedium
+                    ?.copyWith(color: theme.colorScheme.error);
+                List<Text> messages = snapshotData
+                    .where((c) => !c.isValid && c.errorMessage.isNotEmpty)
+                    .map((c) => Text(
+                          c.errorMessage,
+                          style: errorStyle,
+                        ))
+                    .toList();
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const SizedBox.square(
+                        dimension: 20,
+                        child: CircularProgressIndicator(),
+                      ),
+                      ...messages
+                    ],
+                  ),
+                );
               }
             },
           ),

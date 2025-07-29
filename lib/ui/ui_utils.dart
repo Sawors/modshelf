@@ -130,3 +130,12 @@ Image? buildImageFromUri(Uri uri) {
   }
   return null;
 }
+
+double? letterSize(TextStyle? style) {
+  final h = style?.height;
+  final s = style?.fontSize;
+  if (h == null || s == null) {
+    return null;
+  }
+  return h * s;
+}

@@ -1,10 +1,14 @@
+// ignore_for_file: avoid_print
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+import 'package:modshelf/cli/cli_local_mod.dart';
 import 'package:modshelf/dev/mod_host.dart';
+import 'package:modshelf/server/server.dart';
+import 'package:modshelf/tools/cache.dart';
 import 'package:modshelf/tools/core/core.dart';
 import 'package:modshelf/tools/utils.dart';
 
@@ -146,19 +150,192 @@ void updateModlist(Directory installDir, {bool refetch = false}) async {
   }));
 }
 
-Future<void> main(List<String> args) async {
-  final String action = args.elementAtOrNull(0) ?? "";
+Future<void> main(List<String> commandArgs) async {
+  final isInteractive = commandArgs.contains("--interactive");
+  final List<String> args = isInteractive
+      ? () {
+          print("What do you want to do ? :");
+          final String newArgs = stdin.readLineSync() ?? "";
+          bool inQuotes = false;
+          String current = "";
+          final List<String> result = [];
+          for (var ic in newArgs.split("").indexed) {
+            final c = ic.$2;
+            final isQ = c == "\"" || c == "'";
+            if (isQ) {
+              inQuotes = !inQuotes;
+            }
+            if ((c == " " && !inQuotes) || ic.$1 == newArgs.length - 1) {
+              if (c != "\"") {
+                current += c;
+              }
+
+              result.add(current.trim());
+              current = "";
+            } else if (!isQ) {
+              current += c;
+            }
+          }
+          return result;
+        }()
+      : commandArgs;
   print(args);
+  final String action = args.elementAtOrNull(0) ?? "";
+
+  await CacheManager.initialize(
+      cacheDir: await CacheManager.managedCacheDirectory);
+  await CacheManager.instance.loadCache();
 
   switch (action.toLowerCase()) {
     case "package":
-      {
-        final result = CliPackage().execute(args.sublist(1));
-      }
+      final result = CliPackage().execute(args.sublist(1));
     case "install":
-      {}
+      throw UnimplementedError("implement install in CLI");
+    case "upgrade":
+      final installed = await ModpackData.fromInstallation(Directory(
+          "/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/tiboise-2/minecraft/"));
+      final res = Dio().download(
+          "https://sawors.net/modshelf/api/minecraft/tiboise-2",
+          "/home/sawors/Downloads/test.zip",
+          queryParameters: {"a": "patch"},
+          data: PatchRequest(
+                  fromVersion: "1.4",
+                  toVersion: "1.9",
+                  config: installed.modpackConfig)
+              .asMap());
+    case "test":
+      main([
+        "package",
+        "--rebase",
+        "--profile=server",
+        "-d=/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/Tiboise Reforged/minecraft/modshelf/dev/releases/"
+      ]);
+    case "check-update":
+      final baseDir =
+          Directory(args.sublist(1).where((a) => !a.startsWith("-")).first);
+      final bool recursive =
+          args.contains("-r") || args.contains("--recursive");
+      print("listing files...");
+      final files = await baseDir
+          .list(recursive: recursive)
+          .where((f) =>
+              FileSystemEntity.isFileSync(f.path) &&
+              !f.uri.pathSegments.last.startsWith("."))
+          .map((f) => f as File)
+          .toList();
+      print(files.length);
+      await checkForUpdates(files);
+    case "refresh-cache":
+      final baseDir = Directory(args.sublist(1).join(" "));
+      final modpackData =
+          await ModpackData.fromInstallation(baseDir, recursePath: true);
+      await updateModrinthCache(modpackData);
+    case "generate-tiles":
+      final baseDir = Directory(args.sublist(1).join(" "));
+      final modpackData =
+          await ModpackData.fromInstallation(baseDir, recursePath: true);
+      if (!modpackData.isInstalled) {
+        stdout.writeln("This is not a pack installation");
+        return;
+      }
+      await updateModrinthCache(modpackData);
+      final files =
+          await Directory("${modpackData.installDir?.path}/${DirNames.mods}")
+              .list(recursive: false)
+              .where((f) =>
+                  FileSystemEntity.isFileSync(f.path) &&
+                  !f.uri.pathSegments.last.startsWith("."))
+              .map((f) => f as File)
+              .toList();
+      Map<File, String> hashes = Map.fromEntries(await Future.wait(files.map(
+          (f) => f
+              .readAsBytes()
+              .then((r) => MapEntry(f, sha1.convert(r).toString())))));
+      final String outputDirPath =
+          "${modpackData.installDir?.path}/${DirNames.install}/dev/obsidian/Mods";
+      for (var hashEntry in hashes.entries) {
+        stdout.writeln(
+            "building tile for ${hashEntry.key.uri.pathSegments.last}");
+        final hashMatch = CacheManager.instance.getCachedEntry(
+            NamespacedKey(ModrinthModHost.fileMatchNamespace, hashEntry.value));
+        if (hashMatch == null || hashMatch.value == null) {
+          stderr.writeln(
+              "skipping a null file match ${hashEntry.key.uri.pathSegments.last}");
+          continue;
+        }
+        final versionMatch = CacheManager.instance.getCachedEntry(NamespacedKey(
+            ModrinthModHost.versionMatchNamespace, hashMatch.value));
+        if (versionMatch == null || versionMatch.value == null) {
+          stderr
+              .writeln("skipping a null version match ${versionMatch?.value}");
+          continue;
+        }
+        final version =
+            ModrinthModHost().modDataFromJsonMap(versionMatch.value);
+        if (version == null) {
+          stderr.writeln("skipping a null version ${versionMatch.value}");
+          continue;
+        }
+        final projectMatch = CacheManager.instance.getCachedEntry(NamespacedKey(
+            ModrinthModHost.projectMatchNamespace, version.projectId));
+        if (projectMatch == null || projectMatch.value == null) {
+          stderr.writeln("skipping a null project match");
+          continue;
+        }
+        final project = projectMatch.value;
+        File outputFile = File(
+            "$outputDirPath/${project["title"].toString().replaceAll("/", "")}.md");
+        final String result = [
+          "<img src=\"${project["icon_url"]}\" width=64 height=64> ${project["title"]}",
+          "Project : #project/${project["id"]}/${version.versionId} ",
+          "Project URL : https://modrinth.com/project/${project["id"]}",
+          "Version URL : https://modrinth.com/mod/${project["id"]}/version/${version.versionId}",
+          "",
+          "### Sides",
+          "Client : #side/client/${project["client_side"]}",
+          "Server : #side/server/${project["server_side"]}",
+          "",
+          "### File",
+          "File name : `${hashEntry.key.uri.pathSegments.last}`",
+          "Hash (sha1) : `${hashEntry.value}`",
+          "",
+          "### Loaders",
+          ...(project["loaders"] as List<dynamic>)
+              .map((s) => "- #loader/${s.toLowerCase()} "),
+          "### Versions",
+          ...(project["game_versions"] as List<dynamic>)
+              .map((s) => "- #version/${s.replaceAll(".", "-")} "),
+          "### Categories",
+          ...(project["categories"] as List<dynamic>)
+              .map((s) => "- #category/${s.replaceAll(".", "-")} "),
+          ...(project["additional_categories"] as List<dynamic>)
+              .map((s) => "- #category/${s.replaceAll(".", "-")} "),
+          ...(version.jsonData["dependencies"] as List<dynamic>).isNotEmpty
+              ? [
+                  "\n### Dependencies",
+                  ...(version.jsonData["dependencies"] as List<dynamic>)
+                      .where((s) => s["dependency_type"] == "required")
+                      .map((s) {
+                    final depId = s["project_id"];
+                    final cachedDep = CacheManager.instance.getCachedEntry(
+                        NamespacedKey(
+                            ModrinthModHost.projectMatchNamespace, depId));
+                    final String? cachedDepName = cachedDep?.value["title"];
+                    return "- ${cachedDepName != null ? "[$cachedDepName](Mods/$cachedDepName)" : ""} #project/${s["project_id"]}";
+                  })
+                ]
+              : [""],
+        ].join("\n");
+        await outputFile
+            .create(recursive: true)
+            .then((f) => f.writeAsString(result));
+      }
     case _:
-      print("Please select an action :\n - package\n - install");
+      if (action != "help") {
+        print("Action [$action] is not recognized as a valid action.");
+      }
+      print(
+          "Please select an action bellow :\n - package\n - install\n - upgrade\n - interactive\n - help");
   }
   return;
   ////
@@ -219,7 +396,7 @@ Future<void> main(List<String> args) async {
   //
 
   Directory installDir = Directory(
-      "/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/Tiboise II.V/.minecraft");
+      "/home/sawors/.var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/instances/Tiboise Reforged/minecraft");
   const bool readOnly = true;
 
   ModrinthModHost mh = ModrinthModHost();

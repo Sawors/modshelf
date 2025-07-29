@@ -14,12 +14,12 @@ import '../core/manifest.dart';
 enum PatchDifferenceType { added, removed, modified, untouched }
 
 class PatchEntry {
-  final String? comment;
-  final Uri? source;
-  final String relativePath;
+  late final String? comment;
+  late final Uri? source;
+  late final String relativePath;
   String? version;
-  final String crc32;
-  final int size;
+  late final String crc32;
+  late final int size;
 
   PatchEntry(
       {this.source,
@@ -83,14 +83,33 @@ class PatchEntry {
 
   @override
   String toString(
-      {String? root, bool rootAppendVersion = true, bool uriEncode = true}) {
+      {String? root, bool rootAppendVersion = true, bool uriEncode = false}) {
     // ${Uri.encodeFull("${root.endsWith('/') ? root.substring(0, root.length - 1) : root}${rootAppendVersion ? '/${v.version}' : ""}${v.relativePath.startsWith('/') ? v.relativePath : '/${v.relativePath}'}")} ${Uri.encodeFull(v.relativePath)}
-    final encodedPath = root != null
-        ? Uri.encodeFull(
-            "${root.endsWith('/') ? root.substring(0, root.length - 1) : root}${rootAppendVersion ? '/$version' : ""}${relativePath.startsWith('/') ? relativePath : '/$relativePath'}")
+    final completePath = root != null
+        ? "${cleanPath(root)}${rootAppendVersion ? '/$version' : ""}${relativePath.startsWith('/') ? relativePath : '/$relativePath'}"
         : source?.path ?? relativePath;
-    final encodedRelative = Uri.encodeFull(relativePath);
-    return "$crc32 $size $encodedPath $encodedRelative";
+    return "$crc32 $size /${Uri.encodeFull(cleanPath(completePath))} /${Uri.encodeFull(cleanPath(relativePath))}";
+  }
+
+  Object toJsonObject() {
+    return {
+      "source": source.toString(),
+      "path": relativePath,
+      "version": version,
+      "crc32": crc32,
+      "size": size,
+      "comment": comment
+    };
+  }
+
+  PatchEntry.fromJsonObject(Object jsonObject) {
+    final map = jsonObject as Map<String, dynamic>;
+    source = Uri.tryParse(Uri.decodeFull(map["source"]));
+    relativePath = Uri.decodeFull(map["path"]);
+    version = map["version"];
+    crc32 = map["crc32"];
+    size = map["size"];
+    comment = map["comment"];
   }
 }
 
@@ -138,42 +157,42 @@ class PatchDifference {
       case PatchDifferenceType.added:
         return newEntry;
       case PatchDifferenceType.removed:
-        return PatchEntry.voidEntry(version: oldEntry.version);
+        return oldEntry;
       case PatchDifferenceType.modified:
         return newEntry;
       case PatchDifferenceType.untouched:
         return oldEntry;
     }
   }
+
+  Object toJsonObject() {
+    return {
+      "old": oldEntry.toJsonObject(),
+      "new": newEntry.toJsonObject(),
+      "type": type.name
+    };
+  }
+
+  PatchDifference.fromJsonObject(Object jsonObject) {
+    final map = jsonObject as Map<String, dynamic>;
+    oldEntry = PatchEntry.fromJsonObject(map["old"]);
+    newEntry = PatchEntry.fromJsonObject(map["new"]);
+    type = PatchDifferenceType.values.firstWhere((v) => v.name == map["type"],
+        orElse: () => PatchDifferenceType.untouched);
+  }
 }
 
-// class PatchHistory {
-//   List<ContentSnapshot> history = [];
-//
-//   List<String> get versions => history.map((p) => p.version).toList();
-//
-//   PatchHistory.compiled(List<ContentSnapshot> history) {
-//     // relative path to PatchDifference
-//     Map<String, List<PatchEntry>> diff = {};
-//     for (ContentSnapshot content in history) {
-//       for (PatchEntry newEntry in content.content) {
-//         List<PatchEntry> base = diff[newEntry.fileRelativePath] ?? [];
-//         base.add(newEntry);
-//         diff[newEntry.fileRelativePath] = base;
-//       }
-//     }
-//   }
-// }
-
 class Patch {
-  late final String version;
+  late String version;
   late final String firstVersion;
   late final Set<PatchDifference> patch;
 
+  Patch(
+      {required this.patch, required this.version, required this.firstVersion});
+
   Patch.compiled(List<ContentSnapshot> history) {
-    List<ContentSnapshot> sorted = history
-        .sortedBy((k) => Version.fromString(k.version))
-        .toList(growable: false);
+    List<ContentSnapshot> sorted =
+        history.sortedBy((k) => Version.fromString(k.version));
     version = sorted.last.version;
     firstVersion = sorted.first.version;
     // key: Relative path
@@ -185,13 +204,6 @@ class Patch {
         String path = newEntry.relativePath;
         PatchEntry? oldEntry = lastState[path] ?? PatchEntry.voidEntry();
         PatchDifference d = PatchDifference.fromEntries(oldEntry, newEntry);
-        if (path == "/config/dehydration.json5") {
-          print(
-              "${entry.$1} ${d.type.name} => check: ${oldEntry.version} / ${oldEntry.relativePath} | ${newEntry.version} / ${newEntry.relativePath}");
-        }
-        // if ((diff[path] != null && d.type == PatchDifferenceType.untouched)) {
-        //   continue;
-        // }
         diff[path] = d;
         lastState[path] = newEntry;
       }
@@ -199,12 +211,42 @@ class Patch {
     patch = diff.values.toSet();
   }
 
+  Patch.fromJsonObject(Object jsonObject,
+      {String? versionOverride, String? firstVersionOverride}) {
+    patch = (jsonObject as List<dynamic>)
+        .map((e) => PatchDifference.fromJsonObject(e))
+        .toSet();
+    if (versionOverride != null && firstVersionOverride != null) {
+      version = versionOverride;
+      firstVersion = firstVersionOverride;
+      return;
+    }
+    final sorted = patch
+        .sortedBy((k) => Version.fromString(k.getSignificant().version ?? "0"));
+    version = versionOverride ?? sorted.last.getSignificant().version ?? "1";
+    firstVersion =
+        firstVersionOverride ?? sorted.first.getSignificant().version ?? "0";
+  }
+
+  Iterable<PatchDifference> get removed =>
+      patch.where((v) => v.type == PatchDifferenceType.removed);
+
+  Iterable<PatchDifference> get added =>
+      patch.where((v) => v.type == PatchDifferenceType.added);
+
+  Iterable<PatchDifference> get modified =>
+      patch.where((v) => v.type == PatchDifferenceType.modified);
+
+  Iterable<PatchDifference> get untouched =>
+      patch.where((v) => v.type == PatchDifferenceType.untouched);
+
   Patch.difference(ContentSnapshot oldContent, ContentSnapshot newContent,
       {String? versionOverride}) {
     Map<String, PatchEntry> oldIndex = {
       for (var v in oldContent.content) v.relativePath: v
     };
     version = versionOverride ?? newContent.version;
+    firstVersion = versionOverride ?? oldContent.version;
     Map<String, PatchEntry> newIndex = {};
     patch = {};
     for (var v in newContent.content) {
@@ -223,6 +265,9 @@ class Patch {
             oldEntry: v.value,
             newEntry: PatchEntry.voidEntry(),
             type: PatchDifferenceType.removed)));
+    // I don't know from where but we have lots of void entry
+    patch.removeWhere((v) =>
+        v.oldEntry.relativePath.isEmpty && v.newEntry.relativePath.isEmpty);
   }
 
   bool isChanged(PatchDifference diff) {
@@ -253,6 +298,10 @@ class Patch {
             .toSet(),
         version);
   }
+
+  Object toJsonObject() {
+    return patch.map((e) => e.toJsonObject()).toList();
+  }
 }
 
 class ContentSnapshot {
@@ -261,48 +310,70 @@ class ContentSnapshot {
 
   ContentSnapshot(this.content, this.version);
 
+  int get byteSize => content.fold(0, (v1, pe) => v1 + pe.size);
+
+  static bool isExcluded(
+      String filePath, String rootDir, List<String> excludeFilters) {
+    final relPath =
+        cleanPath(filePath.replaceFirst("${cleanPath(rootDir)}/", ""));
+    return excludeFilters.any((filter) =>
+        filter == relPath || RegExp(cleanPath(filter)).hasMatch(relPath));
+  }
+
   static Future<ContentSnapshot> fromDirectory(Directory dir, String version,
-      {List<String>? fileRelativePathExclude, ModpackConfig? config}) async {
-    List<PatchEntry> filePatch = [];
-    if (config == null) {
-      filePatch = await dir
-          .list(recursive: true)
-          .where((e) =>
-              (fileRelativePathExclude == null ||
-                  fileRelativePathExclude.contains(cleanPath(e.path))) &&
-              FileSystemEntity.isFileSync(e.path))
-          .asyncMap((e) async {
-        return PatchEntry.fromFile(File(e.path), Directory(dir.path),
-            sourceVersion: version);
-      }).toList();
-    } else {
-      for (String path in config.bundleInclude) {
-        String absolutePath = "${dir.path}/${cleanPath(path)}";
-        if (config.bundleExclude.any((v) => path.startsWith(cleanPath(v)))) {
-          continue;
-        }
-        if (await FileSystemEntity.isFile(absolutePath)) {
-          filePatch.add(await PatchEntry.fromFile(File(absolutePath), dir,
-              sourceVersion: version));
-        } else if (await FileSystemEntity.isDirectory(absolutePath)) {
-          await Directory(absolutePath)
-              .list(recursive: true)
-              .forEach((f) async {
-            final relPath = cleanPath(f.path.replaceFirst(dir.path, ""));
-            if (FileSystemEntity.isFileSync(f.path)) {
-              if (config.bundleExclude
-                  .any((v) => relPath.startsWith(cleanPath(v)))) {
-                return;
-              }
-              filePatch.add(await PatchEntry.fromFile(File(f.path), dir,
-                  sourceVersion: version));
-            }
-          });
-        }
+      {List<String>? excludeFilters, List<String>? includeFilters}) async {
+    final List<String> relativeInclude =
+        includeFilters?.map((p) => cleanPath(p)).toList() ?? [""];
+    final List<String> relativeExclude = excludeFilters ?? [];
+    List<Future<PatchEntry>> res = [];
+    final dirpath = cleanPath(dir.path);
+    for (String rel in relativeInclude) {
+      final path = "/$dirpath/${cleanPath(rel)}";
+      if (await FileSystemEntity.isFile(path) &&
+          !isExcluded(cleanPath(rel), "", relativeExclude)) {
+        res.add(PatchEntry.fromFile(File(path), dir, sourceVersion: version));
+      } else if (await FileSystemEntity.isDirectory(path)) {
+        await Directory(path)
+            .list(recursive: true, followLinks: false)
+            .forEach((f) async {
+          if (await FileSystemEntity.isFile(f.path) &&
+              !isExcluded(f.path, dirpath, relativeExclude)) {
+            res.add(
+                PatchEntry.fromFile(File(f.path), dir, sourceVersion: version));
+          }
+        });
       }
     }
-
-    return ContentSnapshot(filePatch.toSet(), version);
+    final Set<PatchEntry> paths = (await Future.wait(res)).toSet();
+    // if (config == null) {
+    //   filePatch =
+    // } else {
+    //   for (String path in config.bundleInclude) {
+    //     String absolutePath = "${dir.path}/${cleanPath(path)}";
+    //     if (config.bundleExclude.any((v) => path.startsWith(cleanPath(v)))) {
+    //       continue;
+    //     }
+    //     if (await FileSystemEntity.isFile(absolutePath)) {
+    //       filePatch.add(await PatchEntry.fromFile(File(absolutePath), dir,
+    //           sourceVersion: version));
+    //     } else if (await FileSystemEntity.isDirectory(absolutePath)) {
+    //       await Directory(absolutePath)
+    //           .list(recursive: true)
+    //           .forEach((f) async {
+    //         final relPath = cleanPath(f.path.replaceFirst(dir.path, ""));
+    //         if (FileSystemEntity.isFileSync(f.path)) {
+    //           if (config.bundleExclude
+    //               .any((v) => relPath.startsWith(cleanPath(v)))) {
+    //             return;
+    //           }
+    //           filePatch.add(await PatchEntry.fromFile(File(f.path), dir,
+    //               sourceVersion: version));
+    //         }
+    //       });
+    //     }
+    //   }
+    // }
+    return ContentSnapshot(paths, version);
   }
 
   static ContentSnapshot fromContentString(String contentString,
@@ -324,7 +395,9 @@ class ContentSnapshot {
   }
 
   String toContentString(String root,
-      {bool rootAppendVersion = true, bool safeGeneration = true}) {
+      {bool rootAppendVersion = true,
+      bool safeGeneration = true,
+      bool includePatchDiffAsComment = true}) {
     List<PatchEntry> sorted = safeGeneration ? [] : content.toList();
 
     // "safeGeneration" only means sorting the files.
@@ -353,7 +426,7 @@ class ContentSnapshot {
 
     return sorted
         .map((v) => v.toString(
-            root: root, rootAppendVersion: rootAppendVersion, uriEncode: true))
+            root: root, rootAppendVersion: rootAppendVersion, uriEncode: false))
         .join("\r\n");
   }
 
@@ -374,10 +447,11 @@ class ContentSnapshot {
 Future<Patch> package(Directory source,
     {bool asPatch = true,
     ServerAgent? server,
-    ContentSnapshot? oldContentOverride}) async {
+    ContentSnapshot? oldContentOverride,
+    String? profile}) async {
   ModpackData modpack = await ModpackData.fromInstallation(source);
   Manifest manifest = modpack.manifest;
-  ModpackConfig config = modpack.modpackConfig;
+  ModpackConfig config = modpack.modpackConfig.asProfile(profile);
   ContentSnapshot oldContent = oldContentOverride ?? ContentSnapshot({}, "0");
   String oldVersion = "0";
   if (oldContentOverride == null &&
@@ -389,7 +463,8 @@ Future<Patch> package(Directory source,
   }
   ContentSnapshot newContent = await ContentSnapshot.fromDirectory(
       source, manifest.version,
-      config: config);
+      includeFilters: config.bundleInclude,
+      excludeFilters: config.bundleExclude);
   final patch = Patch.difference(oldContent, newContent);
   patch.version = newContent.version;
   return patch;
@@ -410,9 +485,6 @@ Future<Archive> asArchive(Patch patch, Directory fileSource,
             .toSet(),
         patch.version);
   }
-  print(patch.patch.map((v) => v.toString()).join("\n"));
-  print(ct.toContentString(
-      buildTarget.modpackIdToUri(modpackId, asApi: false).path));
   Archive arch = Archive();
   for (PatchEntry entry in ct.asFiltered(onlyLatest: true).content) {
     File sourceFile = File("${fileSource.path}${entry.relativePath}");
@@ -433,53 +505,78 @@ Future<Archive> asArchive(Patch patch, Directory fileSource,
 class CliPackage extends CliAction {
   @override
   Future<int> execute(List<String> args) async {
+    // package
+    //    [-c, --content]                          Output only the content.
+    //    [-p=<profile>, --profile=<profile>]      Specify a config profile to use.
+    //    [--rebase]                               Create an archive containing all the files.
+    //    -d=<source_dir>,--dir=<source_dir>
     Directory? installDir;
+    String? profile;
+    final bool rebase = args.contains("--rebase");
     final bool outputArchive =
         !(args.contains("-c") || args.contains("--content"));
-    print(args);
     for (String s in args) {
       if (s.startsWith("-d=") || s.startsWith("--dir=")) {
-        installDir = Directory(s.split("=").sublist(1).join(""));
+        installDir = Directory(s.split("=").sublist(1).join("="));
+      } else if (s.startsWith("-p=") || s.startsWith("--profile=")) {
+        profile = s.split("=").sublist(1).join("=");
       }
       if (installDir == null && !s.startsWith("-") && s == args.last) {
         installDir = Directory(s);
       }
     }
+
+    ModpackData installed;
     if (installDir == null || !installDir.existsSync()) {
-      print("Target directory not found !");
-      return -1;
+      try {
+        final rez = await ModpackData.fromInstallation(Directory.current,
+            recursePath: true);
+        installed = rez;
+      } on FileSystemException {
+        stderr.writeln(
+            "No directory has been provided and the current directory is not part of a pack.");
+        return -1;
+      }
+    } else {
+      installed =
+          await ModpackData.fromInstallation(installDir, recursePath: true);
     }
-    print(installDir.path);
     print("creating content snapshot...");
-    ModpackData installed = await ModpackData.fromInstallation(installDir);
 
     final ServerAgent agent = ModshelfServerAgent();
+    if (!installed.isInstalled) {
+      stderr.writeln("The modpack is not installed (strange error message).");
+      return -1;
+    }
 
-    Patch content = await package(installDir, server: agent);
-    print("PEND");
+    Patch content =
+        await package(installed.installDir!, server: agent, profile: profile);
 
     File outputFile = File(
-        "${installDir.path}/${DirNames.releases}/${installed.manifest.version}/content");
+        "${installed.installDir!.path}/${DirNames.releases}/${installed.manifest.version}-content.txt");
     if (!await outputFile.parent.exists()) {
       outputFile.parent.create(recursive: true);
     }
-    print(outputFile.path);
 
-    final archiveOutputFile = File("${outputFile.parent.path}/upload.zip");
+    final archiveOutputFile = File(
+        "${outputFile.parent.path}/${rebase ? "" : "patch-"}${installed.manifest.version}${profile != null ? "-$profile" : ""}.zip");
     if (outputArchive) {
       print("Saving modpack to archive...");
       Manifest man = Manifest.fromJsonString(
-          await File("${installDir.path}/${DirNames.fileManifest}")
+          await File("${installed.installDir!.path}/${DirNames.fileManifest}")
               .readAsString());
-      final arch = await asArchive(content, installDir, agent, man.packId);
+      final arch = await asArchive(
+          content, installed.installDir!, agent, man.packId,
+          rebase: rebase);
       await archiveOutputFile.writeAsBytes(ZipEncoder().encode(arch));
       print("Archive done !");
     } else {
       await outputFile.create();
-      outputFile.writeAsStringSync(
-          content.asContentSnapshot().toContentString(installDir.path));
+      outputFile.writeAsStringSync(content
+          .asContentSnapshot()
+          .toContentString(installed.installDir!.path));
     }
-    print("Modpack packaged at ${outputFile.parent.path} !");
+    print("Modpack packaged at ${archiveOutputFile.path} !");
     // SNAPSHOT SAVED
     return 0;
   }

@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:modshelf/tools/adapters/games.dart';
 import 'package:modshelf/tools/adapters/launchers.dart';
-import 'package:modshelf/ui/main_page/modpack_page/modpack_install_screen/modpack_install_screen.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/modpack_install_screen/modpack_install_screen.dart';
 
 import 'file_picker_field.dart';
 import 'install_mode_selection.dart';
@@ -226,7 +226,7 @@ class _InstallConfigGridState extends State<InstallConfigGrid> {
     return gridContent;
   }
 
-  double longFieldWidth = 359;
+  double longFieldWidth = 351;
 
   @override
   Widget build(BuildContext context) {
@@ -270,60 +270,57 @@ class _InstallConfigGridState extends State<InstallConfigGrid> {
             child: getOptionSelector(
                 context,
                 "Install Directory",
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(left: 480 - longFieldWidth),
-                    child: SizedBox(
-                        child: FutureBuilder(
-                            future: defineDefaultInstallDir,
-                            builder: (context, snapshot) {
-                              String data = snapshot.data?.path ?? "";
-                              if (widget.configMap.installDirPath.isNotEmpty ||
-                                  snapshot.connectionState ==
-                                      ConnectionState.done) {
-                                if (widget.configMap.installDirPath.isEmpty) {
-                                  widget.configMap.installDirPath = data;
-                                  // god-awful way to do this but it works
-                                  Future.delayed(
-                                      const Duration(milliseconds: 100), () {
-                                    setState(() {});
-                                  });
-                                }
-                                return FilePickerField(
-                                  onTextSubmitted: (t) {
-                                    widget.configMap.installDirPath = t;
-                                    setState(() {});
-                                  },
-                                  defaultContent:
-                                      widget.configMap.installDirPath,
-                                );
-                              }
-                              return DecoratedBox(
-                                decoration: BoxDecoration(
-                                    border: Border.all(
-                                        color: Theme.of(context).hintColor),
-                                    borderRadius: BorderRadius.circular(10)),
-                                child: Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10, vertical: 13),
-                                    child: SizedBox.square(
-                                      dimension: 10,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 3,
-                                        color: Theme.of(context)
-                                            .primaryTextTheme
-                                            .bodyMedium
-                                            ?.color,
-                                      ),
-                                    ),
+                SizedBox(
+                    width: longFieldWidth,
+                    child: FutureBuilder(
+                        future: defineDefaultInstallDir,
+                        builder: (context, snapshot) {
+                          String data = snapshot.data?.path ?? "";
+                          if (widget.configMap.installDirPath.isNotEmpty ||
+                              snapshot.connectionState ==
+                                  ConnectionState.done) {
+                            if (widget.configMap.installDirPath.isEmpty) {
+                              widget.configMap.installDirPath = data;
+                              // Future.delayed(
+                              //     const Duration(milliseconds: 100), () {
+                              //   print("delayed");
+                              //   if (mounted) {
+                              //     setState(() {});
+                              //   }
+                              // });
+                            }
+                            return FilePickerField(
+                              onTextSubmitted: (t) {
+                                widget.configMap.installDirPath = t;
+                                setState(() {});
+                              },
+                              defaultContent: widget.configMap.installDirPath,
+                            );
+                          }
+                          return DecoratedBox(
+                            decoration: BoxDecoration(
+                                border: Border.all(
+                                    color: Theme.of(context).hintColor),
+                                borderRadius: BorderRadius.circular(10)),
+                            child: Align(
+                              alignment: Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 13),
+                                child: SizedBox.square(
+                                  dimension: 10,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                    color: Theme.of(context)
+                                        .primaryTextTheme
+                                        .bodyMedium
+                                        ?.color,
                                   ),
                                 ),
-                              );
-                            })),
-                  ),
-                )),
+                              ),
+                            ),
+                          );
+                        }))),
           ),
           widget.installMode == InstallMode.launcher
               ? Padding(

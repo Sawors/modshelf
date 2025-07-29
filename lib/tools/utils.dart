@@ -5,6 +5,8 @@ import 'package:collection/collection.dart';
 import 'package:dio/dio.dart';
 import 'package:mime/mime.dart';
 
+import 'core/core.dart';
+
 Stream<(int, int, File, bool)> downloadFileTemp(Uri source,
     {int periodMs = 100}) async* {
   final tempDir = Directory.systemTemp;
@@ -294,4 +296,36 @@ String cleanPath(String path) {
   return startClean.endsWith("/") || startClean.endsWith("\\")
       ? startClean.substring(0, startClean.length - 1)
       : startClean;
+}
+
+Future<Directory?> searchTreeForRoot(Uri basePath) async {
+  final s = Platform.pathSeparator;
+  final segments = basePath.pathSegments;
+  for (int i = segments.length; i > 0; i--) {
+    final path =
+        "${Platform.isWindows ? "" : s}${segments.sublist(0, i).join(s)}";
+    final manPath = "$path$s${DirNames.fileManifest}";
+    if (await File(manPath).exists()) {
+      return Directory(path);
+    }
+  }
+  return null;
+}
+
+String prettyTimePrint(DateTime dateTime,
+    {bool forceFullDateDisplay = false,
+    bool includeSeconds = true,
+    String dateTimeSeparator = "at"}) {
+  final String timeString =
+      "${dateTime.hour.toString().padLeft(2, "0")}:${dateTime.minute.toString().padLeft(2, "0")}${includeSeconds ? ":${dateTime.second.toString().padLeft(2, "0")}" : ""}";
+  final String dateString;
+  if (forceFullDateDisplay ||
+      (dateTime.difference(DateTime.now()).inHours >= 24 &&
+          dateTime.day != DateTime.now().day)) {
+    dateString =
+        "${dateTime.day.toString().padLeft(2, "0")}/${dateTime.month.toString().padLeft(2, "0")}/${dateTime.year.toString().padLeft(4, "0")}";
+  } else {
+    dateString = "today";
+  }
+  return "$dateString $dateTimeSeparator $timeString";
 }

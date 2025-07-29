@@ -9,7 +9,7 @@ import 'package:modshelf/tools/utils.dart';
 
 import '../cache.dart';
 
-final NamespacedKey steamLibKey = NamespacedKey("game-libraries", "steam");
+const NamespacedKey steamLibKey = NamespacedKey("game-libraries", "steam");
 
 // class OptionFile {
 //   late Map<String, String> keys;
@@ -237,7 +237,7 @@ abstract class SteamGameAdapter extends GameAdapter {
           "Steam library binding is not implemented for Windows");
     }
     if (Platform.isLinux || Platform.isMacOS) {
-      String? cachedRoot = CacheManager.getCachedValue(steamLibKey);
+      String? cachedRoot = CacheManager.instance.getCachedValue(steamLibKey);
       if (cachedRoot != null) {
         JsonDecoder decoder = const JsonDecoder();
         try {
@@ -258,8 +258,8 @@ abstract class SteamGameAdapter extends GameAdapter {
     }
     List<String> filtered =
         output.where((d) => FileSystemEntity.isDirectorySync(d)).toList();
-    CacheManager.setCachedValue(
-        steamLibKey, const JsonEncoder().convert(filtered));
+    CacheManager.instance
+        .setCachedValue(steamLibKey, const JsonEncoder().convert(filtered));
 
     return filtered;
   }
@@ -274,7 +274,8 @@ class MarvelRivalsAdapter extends SteamGameAdapter {
           "Windows game binding is not implemented for $displayName");
     }
     if (Platform.isLinux || Platform.isMacOS) {
-      String? cachedLocation = CacheManager.getCachedValue(cacheEntryKey);
+      String? cachedLocation =
+          CacheManager.instance.getCachedValue(cacheEntryKey);
       if (cachedLocation != null) {
         Directory target = Directory(cachedLocation);
         if (target.existsSync()) {
@@ -287,7 +288,7 @@ class MarvelRivalsAdapter extends SteamGameAdapter {
       for (String root in tryOrder) {
         Directory test = Directory("$root$sp$relativeGameLocation");
         if (test.existsSync()) {
-          CacheManager.setCachedValue(cacheEntryKey, test.path);
+          CacheManager.instance.setCachedValue(cacheEntryKey, test.path);
           return test;
         }
       }

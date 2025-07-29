@@ -30,24 +30,24 @@ class Manifest {
 
   Manifest.fromJsonString(String json) {
     var result = jsonDecode(json) as Map<String, dynamic>;
-    name = result["name"]!.toString();
-    version = result["version"]!.toString();
+    name = result["name"].toString();
+    version = result["version"].toString();
     game = result["game"].toString();
-    gameVersion = result["game-version"]!.toString();
-    modLoader = result["modloader"]!.toString().toLowerCase();
-    modLoaderVersion = result["modloader-version"]!.toString();
+    gameVersion = result["game-version"].toString();
+    modLoader = result["modloader"].toString().toLowerCase();
+    modLoaderVersion = result["modloader-version"].toString();
     String title = name;
     Uri? thumbnail;
     String? description;
     if (result.containsKey("display")) {
-      Map<String, dynamic> displaySubcat = result["display"]!;
+      Map<String, dynamic> displaySubcat = result["display"];
       title = displaySubcat["title"] ?? name;
-      thumbnail = Uri.tryParse(displaySubcat["thumbnail"]!);
+      thumbnail = Uri.tryParse(displaySubcat["thumbnail"]);
       description = displaySubcat["description"];
     }
 
     if (result.containsKey("links")) {
-      Map<String, dynamic> linksSubcat = result["links"]!;
+      Map<String, dynamic> linksSubcat = result["links"];
       if (linksSubcat.containsKey("author")) {
         dynamic authorCat = linksSubcat["author"];
         if (authorCat is String) {
@@ -104,7 +104,7 @@ class Manifest {
     return const JsonEncoder().convert(jsonMap);
   }
 
-  String asJsonString() {
+  String toJsonString() {
     return toString();
   }
 

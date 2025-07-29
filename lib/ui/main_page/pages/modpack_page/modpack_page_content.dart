@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:modshelf/theme/theme_constants.dart';
 import 'package:modshelf/tools/core/core.dart';
-import 'package:modshelf/ui/main_page/modpack_page/page_content/details_page.dart';
-import 'package:modshelf/ui/main_page/modpack_page/page_content/history_page.dart';
-import 'package:modshelf/ui/main_page/modpack_page/page_content/modlist_page.dart';
-import 'package:modshelf/ui/main_page/modpack_page/page_content/patchnote_page.dart';
-import 'package:modshelf/ui/main_page/modpack_page/page_content/readme_page.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/page_content/details_page.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/page_content/history_page.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/page_content/modlist_page.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/page_content/patchnote_page.dart';
+import 'package:modshelf/ui/main_page/pages/modpack_page/page_content/readme_page.dart';
 
 enum ModpackPageContentType { patchnote, readme, history, details, modList }
 
@@ -93,7 +93,9 @@ class _ModpackPageContentState extends State<ModpackPageContent> {
         pageContent = DetailsPage();
         break;
       case ModpackPageContentType.modList:
-        pageContent = ModlistPage();
+        pageContent = ModlistPage(
+          modpackData: widget.data,
+        );
         break;
     }
 
@@ -134,7 +136,13 @@ class _ModpackPageContentState extends State<ModpackPageContent> {
               // margin: EdgeInsets.only(
               //     top: widget.cardMargin / 1.61803399,
               //     left: widget.cardMargin * 2),
-              child: pageContent),
+              child: SizedBox(
+                width: double.infinity,
+                child: Padding(
+                  padding: const EdgeInsets.all(cardMargin),
+                  child: pageContent,
+                ),
+              )),
         ),
       ],
     );

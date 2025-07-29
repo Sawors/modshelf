@@ -8,16 +8,17 @@ import 'package:flutter/material.dart';
 import 'package:modshelf/main.dart';
 import 'package:modshelf/tools/adapters/servers.dart';
 import 'package:modshelf/tools/engine/install.dart';
-import 'package:modshelf/ui/main_page/sidebar_thumbnail.dart';
+import 'package:modshelf/tools/engine/package.dart';
+import 'package:modshelf/ui/main_page/sidebar/sidebar_thumbnail.dart';
 
-import '../../../theme/theme_constants.dart';
-import '../../../tools/adapters/local_files.dart';
-import '../../../tools/cache.dart';
-import '../../../tools/core/core.dart';
-import '../../../tools/core/manifest.dart';
-import '../../ui_utils.dart';
-import '../main_page.dart';
-import '../sidebar.dart';
+import '../../../../theme/theme_constants.dart';
+import '../../../../tools/adapters/games.dart';
+import '../../../../tools/adapters/local_files.dart';
+import '../../../../tools/cache.dart';
+import '../../../../tools/core/core.dart';
+import '../../../../tools/core/manifest.dart';
+import '../../../ui_utils.dart';
+import '../../main_page.dart';
 import 'modpack_install_screen/modpack_install_screen.dart';
 import 'modpack_page_content.dart';
 
@@ -28,50 +29,6 @@ class ModpackPage extends StatelessWidget {
 
   Widget getPageContent(BuildContext context) {
     ThemeData flutterTheme = Theme.of(context);
-    double cardRadius = 10;
-    double cardMargin = 20;
-
-    if (modpackData == null) {
-      const double borderRadius = 20.0;
-      return Center(
-        child: Card(
-          elevation: 4,
-          color: flutterTheme.canvasColor,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(rectangleRoundingRadius)),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(rectangleRoundingRadius),
-                border: Border.all(
-                    color: flutterTheme.colorScheme.primary, width: 3)),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 25, vertical: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    "Add a Modpack",
-                    style: flutterTheme.textTheme.displaySmall
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Card(
-                      shape: const CircleBorder(),
-                      color: flutterTheme.colorScheme.surfaceContainer,
-                      child: SizedBox.square(
-                          dimension: 50,
-                          child: getAddButton(
-                              context, const Duration(seconds: 1))),
-                    ),
-                  )
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
     ModpackData notNullData = modpackData!;
     ModpackTheme theme = notNullData.theme;
     Uri? bckgUri = theme.backgroundImage;
@@ -106,51 +63,46 @@ class ModpackPage extends StatelessWidget {
 
     Color? elevatedCardColor = flutterTheme.colorScheme.surfaceContainerLow;
 
-    return Padding(
-      padding: EdgeInsets.only(left: cardMargin * 2),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Card(
-            margin: EdgeInsets.zero,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(rectangleRoundingRadius),
-              child: Container(
-                height: 200,
-                color: elevatedCardColor,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    banner ?? Container(),
-                    Center(
-                      child: Text(
-                        notNullData.manifest.displayData.title,
-                        style: titleStyle,
-                      ),
-                    )
-                  ],
-                ),
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          margin: EdgeInsets.zero,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(rectangleRoundingRadius),
+            child: Container(
+              height: 200,
+              color: elevatedCardColor,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  banner ?? Container(),
+                  Center(
+                    child: Text(
+                      notNullData.manifest.displayData.title,
+                      style: titleStyle,
+                    ),
+                  )
+                ],
               ),
             ),
           ),
-          Expanded(
-            child: ModpackPageContent(
-              notNullData,
-              elevatedCardColor: elevatedCardColor,
-              cardMargin: cardMargin,
-            ),
+        ),
+        Expanded(
+          child: ModpackPageContent(
+            notNullData,
+            elevatedCardColor: elevatedCardColor,
+            cardMargin: cardMargin,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 1920),
-        child: getPageContent(context));
+    return getPageContent(context);
   }
 }
 
@@ -171,17 +123,139 @@ class AddModpackUrlDialog extends StatefulWidget {
   State<AddModpackUrlDialog> createState() => _AddModpackUrlDialogState();
 }
 
+class VersionSelector extends StatefulWidget {
+  final Uri modpackUri;
+
+  const VersionSelector({super.key, required this.modpackUri});
+
+  @override
+  State<VersionSelector> createState() => _VersionSelectorState();
+}
+
+class _VersionSelectorState extends State<VersionSelector> {
+  late final ServerAgent agent;
+  String selectedVersion = "";
+
+  @override
+  void initState() {
+    super.initState();
+    agent = ModshelfServerAgent();
+  }
+
+  //Center(
+  //         child: ConstrainedBox(
+  //             constraints: const BoxConstraints(maxWidth: 700),
+  //             child: SingleChildScrollView(
+  //                 child: ModpackInstallScreen(widget.modpackUri))))
+
+  @override
+  Widget build(BuildContext context) {
+    final NamespacedKey key = agent.modpackUriToId(widget.modpackUri);
+    InputDecorationTheme inputDecorationTheme =
+        Theme.of(context).inputDecorationTheme;
+    inputDecorationTheme = inputDecorationTheme.copyWith(
+      isDense: true,
+      constraints: BoxConstraints.tight(const Size.fromHeight(35)),
+      suffixStyle: Theme.of(context).textTheme.titleMedium,
+      contentPadding: const EdgeInsets.only(left: 8),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+      ),
+    );
+    return Center(
+        child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 700),
+            child: SingleChildScrollView(
+                child: FutureBuilder(
+                    future: agent.fetchVersions(key).then((v) {
+                      return agent.getLatestVersion(key).then((v2) => (v, v2));
+                    }),
+                    builder: (context, asyncSnapshot) {
+                      if (asyncSnapshot.data == null) {
+                        return const CircularProgressIndicator();
+                      }
+                      List<String> versions =
+                          asyncSnapshot.data?.$1.reversed.toList() ?? [];
+                      String latest = asyncSnapshot.data?.$2 ?? versions[0];
+                      if (selectedVersion.isEmpty) {
+                        selectedVersion = latest;
+                      }
+                      return Card(
+                        color: Theme.of(context).canvasColor,
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 10),
+                                child: Text(
+                                  "Install Modpack",
+                                  style:
+                                      Theme.of(context).textTheme.displaySmall,
+                                ),
+                              ),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    "Version  :  ",
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(fontWeight: FontWeight.bold),
+                                  ),
+                                  DropdownMenu(
+                                    initialSelection: latest,
+                                    inputDecorationTheme: inputDecorationTheme,
+                                    dropdownMenuEntries: versions
+                                        .map((v) => DropdownMenuEntry(
+                                            value: v, label: v))
+                                        .toList(),
+                                    onSelected: (v) {
+                                      if (v != null) {
+                                        setState(() {
+                                          selectedVersion = v;
+                                        });
+                                      }
+                                    },
+                                  ),
+                                ],
+                              ),
+                              FutureBuilder(
+                                  future: Future.wait([
+                                    agent.getContent(key, selectedVersion),
+                                    agent.getDownloadData(key, selectedVersion)
+                                  ]),
+                                  builder: (context, snapshot) {
+                                    final ModpackDownloadData? data = snapshot
+                                        .data?[1] as ModpackDownloadData?;
+                                    final ContentSnapshot? content =
+                                        snapshot.data?[0] as ContentSnapshot?;
+                                    if (data == null || content == null) {
+                                      return const CircularProgressIndicator();
+                                    }
+                                    return ModpackInstallScreen(
+                                        InstallScreenData(
+                                            modpackData: data,
+                                            game: GameAdapter.fromId(
+                                                data.manifest.game)),
+                                        content);
+                                  }),
+                            ],
+                          ),
+                        ),
+                      );
+                    }))));
+  }
+}
+
 class _AddModpackUrlDialogState extends State<AddModpackUrlDialog> {
   void showInstallScreen(BuildContext context, Uri modpackUri) {
     Navigator.of(context, rootNavigator: true).pop();
     showDialog(
         context: context,
         builder: (cont) {
-          return Center(
-              child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 700),
-                  child: SingleChildScrollView(
-                      child: ModpackInstallScreen(modpackUri))));
+          return VersionSelector(modpackUri: modpackUri);
         });
   }
 
@@ -359,17 +433,17 @@ class _AddModpackUrlDialogState extends State<AddModpackUrlDialog> {
         NamespacedKey packKey = NamespacedKey.fromString(lastEvaluatedContent);
         Future<Manifest> future =
             serverAgent.getLatestVersion(packKey).then((v) {
-          String? cached = CacheManager.getCachedValue(
-              Manifest.cacheKeyFromString(packKey, v));
+          String? cached = CacheManager.instance
+              .getCachedValue(Manifest.cacheKeyFromString(packKey, v));
           if (cached != null) {
             return Future.value(Manifest.fromJsonString(cached));
           }
           return serverAgent
               .fetchManifest(NamespacedKey.fromString(lastEvaluatedContent), v)
               .then((v) {
-            CacheManager.setCachedValue(
+            CacheManager.instance.setCachedValue(
                 Manifest.cacheKeyFromString(packKey, v.version),
-                v.asJsonString());
+                v.toJsonString());
             return v;
           });
         });
@@ -497,9 +571,10 @@ class _AddModpackUrlDialogState extends State<AddModpackUrlDialog> {
             }
             showInstallScreen(context, uri);
           case ModpackUriInputType.manifestImport:
-            InstallManager.linkManifest(File(lastEvaluatedContent)).then((v) {
+            UnpackArchiveTask.linkManifest(File(lastEvaluatedContent))
+                .then((v) {
               loadStoredManifests().then((v) {
-                PageState.setValue(ModpackListPage.manifestsKey, v);
+                PageState.setValue(MainPage.manifestsKey, v);
               });
             });
             Navigator.of(context, rootNavigator: true).pop();
@@ -555,7 +630,7 @@ class _AddModpackUrlDialogState extends State<AddModpackUrlDialog> {
             height: titleAndBottomHeight,
             child: Center(
               child: Text(
-                "Add Modpack",
+                "Add a Pack",
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),

@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:collection/collection.dart';
+import 'package:modshelf/tools/core/core.dart';
+import 'package:modshelf/tools/core/modpack_config.dart';
 import 'package:modshelf/tools/engine/package.dart';
+import 'package:modshelf/tools/utils.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
 final Map<String, dynamic> cache = {};
-const int cacheLifetimeMinutes = 60 * 24;
+const int cacheLifetimeMinutes = 60 * 24 * 2;
 const String localBasePath = "/home/light-services/webserver/modshelf";
 
 void main(List<String> args) async {
@@ -30,14 +34,17 @@ void main(List<String> args) async {
   // Enable content compression
   server.autoCompress = true;
 
-  print('Serving at https://${server.address.host}:${server.port}');
+  stdout.writeln('Serving at https://${server.address.host}:${server.port}');
 }
 
-dynamic getFromCache(String entryKey, dynamic Function() ifNotFound) {
+dynamic getFromCache(String entryKey, dynamic Function() ifNotFound,
+    {cacheIfNotFound = true}) {
   final val = cache[entryKey] ??
       () {
         final vt = ifNotFound();
-        cache[entryKey] = vt;
+        if (cacheIfNotFound) {
+          cache[entryKey] = vt;
+        }
         return vt;
       }();
   return val;
@@ -75,7 +82,7 @@ class PackMeta {
       };
 }
 
-Response entryPoint(Request request) {
+Future<Response> entryPoint(Request request) async {
   // this function is only run if we go through the API in the Uri.
   // Example :
   // https://sawors.net/modshelf/api/<game>/<pack>/     -> this path leads here
@@ -94,15 +101,17 @@ Response entryPoint(Request request) {
   try {
     meta = PackMeta.fromUri(reqUri);
     if (params["v"] != null) {
-      meta.version = params["v"];
+      meta.version =
+          Version.tryFromString(params["v"])?.toString(shortened: false);
     }
-  } on IndexError {
+  } on RangeError {
     return defaultResponse;
   }
 
   if (meta.version == null) {
     final String action = params["a"] ?? "";
-    return handleAction(action, meta, request) ?? defaultResponse;
+
+    return await handleAction(action, meta, request) ?? defaultResponse;
   }
 
   final String game = meta.game;
@@ -118,9 +127,10 @@ Response entryPoint(Request request) {
           .replaceAll("/.", ""));
       ContentSnapshot ct =
           ContentSnapshot.fromContentString(contentFile.readAsStringSync());
-      cache[contentCacheKey] = ct;
       return ct;
     });
+
+    print(content.content.map((v) => v.toString()).join("\n") + "\n");
 
     if (contentPath == "content" && (params.isEmpty || params["c"] != "raw")) {
       headers.addAll(meta.packagingHeaders);
@@ -129,11 +139,15 @@ Response entryPoint(Request request) {
               meta.toUri(includeVersion: false, isApi: false).path),
           headers: headers);
     }
-    final PatchEntry? searchedEntry =
-        content.content.firstWhereOrNull((v) => v.relativePath == contentPath);
+    final PatchEntry? searchedEntry = content.content.firstWhereOrNull(
+        (v) => cleanPath(v.relativePath) == cleanPath(contentPath));
+    print(contentPath);
     if (searchedEntry != null) {
+      print(searchedEntry.relativePath);
+      print(searchedEntry.toString());
+      print("${reqUri.scheme}://${reqUri.host}${searchedEntry.source?.path}");
       return Response.found(
-          "${reqUri.scheme}://${reqUri.host}${searchedEntry.relativePath}",
+          "${reqUri.scheme}://${reqUri.host}${searchedEntry.source?.path}",
           headers: headers);
     }
   }
@@ -141,56 +155,182 @@ Response entryPoint(Request request) {
   return Response.found(newLoc, headers: headers);
 }
 
-Response? handleAction(
-    String action, PackMeta packMeta, Request sourceRequest) {
+bool? stringParseBool(String? toParse,
+    {bool? defaultValue,
+    List<String>? trueOverride,
+    List<String>? falseOverride}) {
+  if (toParse == null || toParse == "null") {
+    return defaultValue;
+  }
+  const List<String> trueLike = ["true", "1", "yes"];
+  const List<String> falseLike = ["false", "0", "no"];
+  return (trueOverride ?? trueLike).contains(toParse.toLowerCase())
+      ? true
+      : (falseOverride ?? falseLike).contains(toParse.toLowerCase())
+          ? false
+          : defaultValue;
+}
+
+class PatchRequest {
+  final String fromVersion;
+  final String toVersion;
+  final ModpackConfig? config;
+
+  PatchRequest(
+      {required this.fromVersion,
+      required this.toVersion,
+      required this.config});
+
+  factory PatchRequest.fromJson(String json) {
+    final jsonMap = jsonDecode(json);
+    return PatchRequest(
+        fromVersion: jsonMap["fromVersion"],
+        toVersion: jsonMap["toVersion"],
+        config: ModpackConfig.fromJsonString(jsonMap["config"]));
+  }
+
+  Map<String, dynamic> asMap() {
+    return {
+      "fromVersion": fromVersion,
+      "toVersion": toVersion,
+      "config": config?.toJsonString()
+    };
+  }
+
+  String toJson() {
+    return jsonEncode(asMap());
+  }
+}
+
+Future<Response?> actionPatch(
+    PackMeta packMeta, Request sourceRequest, bool asContentString) async {
   final params = sourceRequest.requestedUri.queryParameters;
   final Map<String, Object> headers = Map.from(sourceRequest.headers);
+  PatchRequest request;
+  final body = await sourceRequest.readAsString();
+  try {
+    request = PatchRequest.fromJson(body);
+  } catch (e) {
+    request = PatchRequest(
+        fromVersion: params["f"] ?? "",
+        toVersion: params["t"] ?? "",
+        config: ModpackConfig(
+            repository: null,
+            type: "empty",
+            forceLocal: false,
+            bundleInclude: [],
+            bundleExclude: [],
+            upgradeIgnored: [],
+            upgradeIgnoreAddition: [],
+            upgradeIgnoreModification: [],
+            upgradeIgnoreDeletion: [],
+            profiles: {}));
+  }
+  final String fromV =
+      Version.fromString(request.fromVersion).toString(shortened: false);
+  final String toV =
+      Version.fromString(request.toVersion).toString(shortened: false);
+  if (fromV.isEmpty || toV.isEmpty) {
+    return null;
+  }
+  final PackMeta metaFrom = packMeta.withVersion(fromV);
+  final PackMeta metaTo = packMeta.withVersion(toV);
+  final ContentSnapshot contentFrom =
+      getFromCache(metaFrom.contentCacheKey, () {
+    File contentFile = File(
+        "$localBasePath/${metaFrom.game}/${metaFrom.packId}/${metaFrom.version}/content"
+            .replaceAll("/..", "")
+            .replaceAll("/.", ""));
+    final ct =
+        ContentSnapshot.fromContentString(contentFile.readAsStringSync());
+    return ct;
+  });
+  final ContentSnapshot contentTo = getFromCache(metaTo.contentCacheKey, () {
+    File contentFile = File(
+        "$localBasePath/${metaTo.game}/${metaTo.packId}/${metaTo.version}/content"
+            .replaceAll("/..", "")
+            .replaceAll("/.", ""));
+    final ct =
+        ContentSnapshot.fromContentString(contentFile.readAsStringSync());
+    return ct;
+  });
+
+  final String versionStr = "$fromV-$toV";
+  final Patch patch = getFromCache(
+      "patch:$versionStr",
+      () => Patch.difference(contentFrom, contentTo,
+          versionOverride: versionStr));
+  final ModpackConfig config;
+  final reqConfig = request.config;
+  if (reqConfig != null && reqConfig.forceLocal && reqConfig.type != "empty") {
+    config = reqConfig;
+  } else {
+    config = getFromCache("config:$toV", () {
+      final configPath = contentTo.content
+          .firstWhereOrNull((v) =>
+              cleanPath(v.relativePath) == cleanPath(DirNames.fileConfig))
+          ?.source;
+      if (configPath != null) {
+        final configFile = File(
+            "$localBasePath/${configPath.pathSegments.sublist(1).join("/")}"
+                .replaceAll("/..", "")
+                .replaceAll("/.", ""));
+        if (configFile.existsSync()) {
+          try {
+            return ModpackConfig.fromJsonString(configFile.readAsStringSync());
+          } catch (_) {
+            return request.config;
+          }
+        }
+      }
+      return request.config;
+    });
+  }
+  if (asContentString) {
+    final res =
+        jsonEncode(patch.onlyChanged().map((e) => e.toJsonObject()).toList());
+    return Response.ok(res, headers: headers);
+  }
+  final String res = ContentSnapshot(
+          patch
+              .onlyChanged()
+              .where((v) => config.patchShouldInclude(v))
+              .map((v) => v.getSignificant())
+              .toSet(),
+          patch.version)
+      .toContentString(packMeta
+          .withVersion(patch.version)
+          .toUri(includeVersion: false, isApi: false)
+          .path);
+  headers.addAll(packMeta.withVersion(patch.version).packagingHeaders);
+  return Response.ok(res, headers: headers);
+}
+
+Future<Response?> actionGetContent(
+    PackMeta packMeta, Request sourceRequest) async {
+  final body = await sourceRequest.readAsString();
+  final headers = Map.of(sourceRequest.headers);
+  final ContentSnapshot ct;
+  try {
+    ct = ContentSnapshot.fromContentString(body);
+  } catch (e) {
+    return Response.badRequest(body: e.toString());
+  }
+  headers.addAll(packMeta.withVersion(ct.version).packagingHeaders);
+  // security feature : nothing goes out of the specified domain
+  return Response.ok(
+      ct.toContentString("modshelf/${packMeta.game}/${packMeta.packId}"),
+      headers: headers);
+}
+
+Future<Response?> handleAction(
+    String action, PackMeta packMeta, Request sourceRequest) async {
   switch (action) {
     case "patch":
-      final String fromV = params["f"] ?? "";
-      final String toV = params["t"] ?? "";
-      if (fromV.isEmpty || toV.isEmpty) {
-        return null;
-      }
-      final PackMeta metaFrom = packMeta.withVersion(fromV);
-      final PackMeta metaTo = packMeta.withVersion(toV);
-      final ContentSnapshot contentFrom =
-          getFromCache(metaFrom.contentCacheKey, () {
-        File contentFile = File(
-            "$localBasePath/${metaFrom.game}/${metaFrom.packId}/${metaFrom.version}/content"
-                .replaceAll("/..", "")
-                .replaceAll("/.", ""));
-        final ct =
-            ContentSnapshot.fromContentString(contentFile.readAsStringSync());
-        cache[metaFrom.contentCacheKey] = ct;
-        return ct;
-      });
-      final ContentSnapshot contentTo =
-          getFromCache(metaTo.contentCacheKey, () {
-        File contentFile = File(
-            "$localBasePath/${metaTo.game}/${metaTo.packId}/${metaTo.version}/content"
-                .replaceAll("/..", "")
-                .replaceAll("/.", ""));
-        final ct =
-            ContentSnapshot.fromContentString(contentFile.readAsStringSync());
-        cache[metaTo.contentCacheKey] = ct;
-        return ct;
-      });
-      final Patch patch = Patch.difference(contentFrom, contentTo,
-          versionOverride: "$fromV-$toV");
-      headers.addAll(packMeta.withVersion(patch.version).packagingHeaders);
-      final String res = ContentSnapshot(
-              patch
-                  .onlyChanged()
-                  .map((v) => v.getSignificant())
-                  .where((v) => v.version != fromV)
-                  .toSet(),
-              patch.version)
-          .toContentString(packMeta
-              .withVersion(patch.version)
-              .toUri(includeVersion: false, isApi: false)
-              .path);
-      return Response.ok(res, headers: headers);
+    case "patch-content":
+      return actionPatch(packMeta, sourceRequest, action == "patch-content");
+    case "get":
+      return actionGetContent(packMeta, sourceRequest);
   }
   return null;
 }

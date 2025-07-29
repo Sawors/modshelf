@@ -1,13 +1,17 @@
 import 'dart:io';
 
+import 'package:modshelf/tools/engine/package.dart';
+import 'package:modshelf/tools/utils.dart';
+
 import 'manifest.dart';
 import 'modpack_config.dart';
 
 final String s = Platform.pathSeparator;
 
 const String defaultThumbnail = "https://sawors.net/assets/unknown.png";
+const String noGameNamespace = "general";
 
-class DirNames {
+abstract class DirNames {
   static const String config = "config";
   static const String crash = "crash-reports";
   static const String install = "modshelf";
@@ -80,7 +84,6 @@ class Version implements Comparable<Version> {
         release = int.parse(list[0]);
         major = int.parse(list[1]);
         minor = int.parse(list[2]);
-        ;
       case _:
         throw FormatException(
             "Version is not correctly formatted (value ${list.length} not in range [1..3])");
@@ -101,7 +104,7 @@ class Version implements Comparable<Version> {
   }
 
   @override
-  String toString({bool shortened = true}) {
+  String toString({bool shortened = false}) {
     if (shortened) {
       String result = "$release.$major";
       if (minor > 0) {
@@ -130,10 +133,10 @@ class ManifestDisplay {
 }
 
 class NamespacedKey {
-  late final String namespace;
-  late final String key;
+  final String namespace;
+  final String key;
 
-  NamespacedKey(this.namespace, this.key);
+  const NamespacedKey(this.namespace, this.key);
 
   static NamespacedKey? fromStringOrNull(String string) {
     List<String> split = string.split(":");
@@ -148,18 +151,19 @@ class NamespacedKey {
     return NamespacedKey(namespace, key);
   }
 
-  NamespacedKey.fromString(String string) {
+  static NamespacedKey fromString(String string) {
     List<String> split = string.split(":");
     if (split.length < 2) {
       throw const FormatException(
           "Namespaced key is not correctly formatted ! Missing a namespace or a key");
     }
-    namespace = split[0];
-    key = split.sublist(1).join(":");
+    final namespace = split[0];
+    final key = split.sublist(1).join(":");
     if (namespace.isEmpty || key.isEmpty) {
       throw const FormatException(
           "Namespaced key is not correctly formatted ! Missing a namespace or a key");
     }
+    return NamespacedKey(namespace, key);
   }
 
   @override
@@ -206,23 +210,38 @@ class ModpackData {
       required this.theme,
       this.installDir});
 
-  static Future<ModpackData> fromInstallation(Directory source) async {
-    File manFile = File("${source.path}$s${DirNames.fileManifest}");
-    File confFile = File("${source.path}$s${DirNames.fileConfig}");
-    Manifest man = Manifest.fromJsonString(await manFile.readAsString());
-    ModpackConfig modpackConfig =
+  static Future<ModpackData> fromInstallation(Directory source,
+      {bool recursePath = false}) async {
+    Directory root =
+        recursePath ? await searchTreeForRoot(source.uri) ?? source : source;
+    final File manFile = File("${root.path}$s${DirNames.fileManifest}");
+    final File confFile = File("${root.path}$s${DirNames.fileConfig}");
+    if (!await manFile.exists()) {
+      throw const FileSystemException(
+          "This directory tree does not contain a pack");
+    }
+    final Manifest man = Manifest.fromJsonString(await manFile.readAsString());
+    final ModpackConfig modpackConfig =
         ModpackConfig.fromJsonString(await confFile.readAsString());
 
-    ModpackTheme theme = await ModpackTheme.fromFile(
-        File("${source.path}$s${DirNames.themeFile}"));
+    final ModpackTheme theme = await ModpackTheme.fromFile(
+        File("${root.path}$s${DirNames.themeFile}"));
     return ModpackData(
         manifest: man,
         modpackConfig: modpackConfig,
         theme: theme,
-        installDir: source);
+        installDir: root);
   }
 
   String get themeDirPath => "$installDir$s${DirNames.installThemeDir}";
 
   String get patchNoteDirPath => "$installDir$s${DirNames.patchnotes}";
+
+  bool get isInstalled => installDir?.existsSync() ?? false;
+
+  Future<ContentSnapshot?> getContentSnapshot() async {
+    return isInstalled
+        ? ContentSnapshot.fromDirectory(installDir!, manifest.version)
+        : null;
+  }
 }

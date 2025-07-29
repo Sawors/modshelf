@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:modshelf/tools/core/core.dart';
+import 'package:modshelf/tools/engine/package.dart';
 
 final String sep = Platform.pathSeparator;
 
@@ -57,6 +58,22 @@ Future<List<ModpackData>> loadStoredManifests(
     }
   }
   return manifests;
+}
+
+Future<ContentSnapshot> snapshotFromInstall(Directory install) async {
+  final ModpackData localData = await ModpackData.fromInstallation(install);
+  final List<PatchEntry> res = [];
+  await Future.wait(install
+      .listSync(recursive: true, followLinks: false)
+      .map((f) => FileSystemEntity.isFile(f.path).then((isFile) {
+            if (isFile) {
+              return PatchEntry.fromFile(f as File, install,
+                      sourceVersion: localData.manifest.version)
+                  .then((p) => res.add(p));
+            }
+            return Future.value();
+          })));
+  return ContentSnapshot(res.toSet(), localData.manifest.version);
 }
 
 class LocalFiles {
